@@ -134,9 +134,9 @@
   chi   = r2a - kk;                                                          \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, kk, (col), (pt).maxsteps, (inc));                 \
-  p0  = *ptr; ptr += (inc);                                                  \
-  p1  = *ptr; ptr += (inc);                                                  \
+  ptr = PTR_2D((pt).table, (col),kk, (inc),(pt).maxsteps);                   \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
   p2  = *ptr;                                                                \
   dv  = p1 - p0;                                                             \
   d2v = p2 - 2 * p1 + p0;                                                    \
@@ -158,9 +158,9 @@
   chi   = r2a - kk;                                                          \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, kk, (col), (pt).maxsteps, (inc));                 \
-  p0  = *ptr; ptr += (inc);                                                  \
-  p1  = *ptr; ptr += (inc);                                                  \
+  ptr = PTR_2D((pt).table, (col), kk, (inc), (pt).maxsteps);                 \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
   p2  = *ptr;                                                                \
   dv  = p1 - p0;                                                             \
   d2v = p2 - 2 * p1 + p0;                                                    \
@@ -181,9 +181,9 @@
   chi   = r2a - kk;                                                          \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, kk, (col), (pt).maxsteps, (inc));                 \
-  p0  = *ptr; ptr += (inc);                                                  \
-  p1  = *ptr; ptr += (inc);                                                  \
+  ptr = PTR_2D((pt).table, (col), kk, (inc), (pt).maxsteps);                 \
+  p0  = *ptr; ptr ++;                                                       \
+  p1  = *ptr; ptr ++;                                                       \
   p2  = *ptr;                                                                \
   dv  = p1 - p0;                                                             \
   d2v = p2 - 2 * p1 + p0;                                                    \
@@ -341,9 +341,9 @@
   chi   = r2a - k;                                                           \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, k, (col), (pt).maxsteps, (inc));                  \
-  p0  = *ptr; ptr += (inc);                                                  \
-  p1  = *ptr; ptr += (inc);                                                  \
+  ptr = PTR_2D((pt).table, (col), k, (inc), ((pt).maxsteps));                \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
   p2  = *ptr;                                                                \
   dv  = p1 - p0;                                                             \
   d2v = p2 - 2 * p1 + p0;                                                    \
@@ -396,10 +396,10 @@
   dfac3 =    1.0/6.0 * (3.0*chi*chi-1.0);                                    \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, k-1, (col), (pt).maxsteps, (inc));                \
-  p0  = *ptr; ptr += (inc);                                                  \
-  p1  = *ptr; ptr += (inc);                                                  \
-  p2  = *ptr; ptr += (inc);                                                  \
+  ptr = PTR_2D((pt).table, (col), k-1, (inc), (pt).maxsteps);                \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
+  p2  = *ptr; ptr ++;                                                        \
   p3  = *ptr;                                                                \
                                                                              \
   /* potential energy */                                                     \
@@ -441,10 +441,10 @@
   a     = 1.0 - b;                                                           \
                                                                              \
   /* intermediate values */                                                  \
-  k     = k * (inc) + (col);                                                 \
+  k     = k + (col)*(pt).maxsteps;                                           \
   p1    = (pt).table[k];                                                     \
   d21   = (pt).table2[k];                                                    \
-  k    += (inc);                                                             \
+  k++;                                                                       \
   p2    = (pt).table[k];                                                     \
   d22   = (pt).table2[k];                                                    \
   a2    = a * a - 1;                                                         \
@@ -483,9 +483,9 @@
   chi   = r2a - k;                                                           \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, k, (col), (pt).maxsteps, (inc));                  \
-  p0  = *ptr; ptr += (inc);                                                  \
-  p1  = *ptr; ptr += (inc);                                                  \
+  ptr = PTR_2D((pt).table, (col), k, (inc), ((pt).maxsteps));                \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
   p2  = *ptr;                                                                \
   dv  = p1 - p0;                                                             \
   d2v = p2 - 2 * p1 + p0;                                                    \
@@ -528,10 +528,10 @@
   fac3 =  (1.0/6.0) * chi * (chi*chi-1.0);                                   \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, k-1, (col), (pt).maxsteps, (inc));                \
-  p0  = *ptr; ptr += (inc);                                                  \
-  p1  = *ptr; ptr += (inc);                                                  \
-  p2  = *ptr; ptr += (inc);                                                  \
+  ptr = PTR_2D((pt).table, (col), k-1, (inc), (pt).maxsteps);                \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
+  p2  = *ptr; ptr ++;                                                        \
   p3  = *ptr;                                                                \
                                                                              \
   /* the function value */                                                   \
@@ -567,10 +567,10 @@
   a     = 1.0 - b;                                                           \
                                                                              \
   /* intermediate values */                                                  \
-  k     = k * (inc) + (col);                                                 \
+  k     = k + (col)*(pt).maxsteps;                                           \
   p1    = (pt).table[k];                                                     \
   d21   = (pt).table2[k];                                                    \
-  k    += (inc);                                                             \
+  k++;                                                                       \
   p2    = (pt).table[k];                                                     \
   d22   = (pt).table2[k];                                                    \
   a2    = a * a - 1;                                                         \
@@ -609,9 +609,9 @@
   chi   = r2a - k;                                                           \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, k, (col), (pt).maxsteps, (inc));                  \
-  p0  = *ptr; ptr += (inc);                                                  \
-  p1  = *ptr; ptr += (inc);                                                  \
+  ptr = PTR_2D((pt).table, (col), k, (inc), ((pt).maxsteps));                \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
   p2  = *ptr;                                                                \
   dv  = p1 - p0;                                                             \
   d2v = p2 - 2 * p1 + p0;                                                    \
@@ -655,10 +655,10 @@
   dfac3 =    1.0/6.0 * (3.0*chi*chi-1.0);                                    \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, k-1, (col), (pt).maxsteps, (inc));                \
-  p0  = *ptr; ptr += (inc);                                                  \
-  p1  = *ptr; ptr += (inc);                                                  \
-  p2  = *ptr; ptr += (inc);                                                  \
+  ptr = PTR_2D((pt).table, (col), k-1, (inc), (pt).maxsteps);                \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
+  p2  = *ptr; ptr ++;                                                        \
   p3  = *ptr;                                                                \
                                                                              \
   /* twice the derivative */                                                 \
@@ -695,10 +695,10 @@
   a     = 1.0 - b;                                                           \
                                                                              \
   /* intermediate values */                                                  \
-  k     = k * (inc) + (col);                                                 \
+  k     = k + (col)*(pt).maxsteps;                                           \
   p1    = (pt).table[k];                                                     \
   d21   = (pt).table2[k];                                                    \
-  k    += (inc);                                                             \
+  k++;                                                                       \
   p2    = (pt).table[k];                                                     \
   d22   = (pt).table2[k];                                                    \
   a2    = a * a - 1;                                                         \

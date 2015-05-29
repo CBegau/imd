@@ -144,10 +144,10 @@ void fix_pottab_bks(void) {
     r2a   = 1.6 - pt->begin[1];
     istep = pt->invstep[col];
     k     = (int) (r2a * istep);
-    pk = *PTR_2D(pt->table, k,   col, pt->maxsteps, pt->ncols);
-    dp = *PTR_2D(pt->table, k+1, col, pt->maxsteps, pt->ncols) - pk;
+    pk = *PTR_2D(pt->table, col, k,   pt->ncols, pt->maxsteps);
+    dp = *PTR_2D(pt->table, col, k+1, pt->ncols, pt->maxsteps) - pk;
     for (i=0; i<k; i++)
-      *PTR_2D(pt->table, i, col, pt->maxsteps, pt->ncols)
+      *PTR_2D(pt->table, col, i, pt->ncols, pt->maxsteps)
         -= (i-k)*(i-k)*(i-k)*0.0004;
   }
 }
@@ -257,7 +257,7 @@ void read_pot_table( pot_table_t *pt, char *filename, int ncols, int radial )
   MPI_Bcast( pt->step,    ncols, REAL,    0, MPI_COMM_WORLD);
   MPI_Bcast( pt->invstep, ncols, REAL,    0, MPI_COMM_WORLD);
   MPI_Bcast( pt->len,     ncols, MPI_INT, 0, MPI_COMM_WORLD);
-  tablesize = (pt->maxsteps + 2) * ncols;
+  tablesize = (pt->maxsteps) * ncols;
   if (0 != myid) {
     pt->table = (real *) malloc(tablesize*sizeof(real));
     if (NULL==pt->table)
@@ -373,6 +373,17 @@ void read_pot_table1(pot_table_t *pt, int ncols, char *filename,
   if (NULL==pt->table)
     error_str("Cannot extend memory for function table %s.",filename);
 
+  //reorder the strided values of different columns into blocks
+  real *tmp = malloc(tablesize * sizeof *tmp);
+  if (NULL==tmp)
+      error_str("Cannot change striding for function table %s.",filename);
+  memcpy(tmp, pt->table, tablesize* sizeof *tmp);
+  for (i=0; i<ncols; ++i) {
+	  for (k=0; k<pt->maxsteps; ++k){
+		  pt->table[k + pt->maxsteps*i] = tmp[k*ncols + i];
+	  }
+  }
+  free(tmp);
 }
 
 
@@ -407,7 +418,7 @@ void read_pot_table2(pot_table_t *pt, int ncols, char *filename,
     pt->invstep[i] = 1.0 / pt->step[i];
     numstep        = 1 + (pt->end[i] - pt->begin[i]) / pt->step[i];
     pt->len[i]     = (int) (numstep+0.49);
-    pt->maxsteps   = MAX(pt->maxsteps, pt->len[i]);
+    pt->maxsteps   = MAX(pt->maxsteps, pt->len[i]+2);
 
     /* some security against rounding errors */
     if ((FABS(pt->len[i] - numstep) >= 0.1) && (0==myid)) {
@@ -420,7 +431,7 @@ void read_pot_table2(pot_table_t *pt, int ncols, char *filename,
 
   /* allocate the function table */
   /* allow some extra values at the end for interpolation */
-  tablesize = ncols * (pt->maxsteps+2);
+  tablesize = ncols * (pt->maxsteps);
   pt->table = (real *) malloc(tablesize * sizeof(real));
   if (NULL==pt->table)
     error_str("Cannot allocate memory for function table %s.",filename);
@@ -431,20 +442,20 @@ void read_pot_table2(pot_table_t *pt, int ncols, char *filename,
       if (1 != fscanf(infile,FORMAT1, &val)) {
         if (0==myid) error_str("wrong format in file %s.", filename);
       }
-      *PTR_2D(pt->table,k,i,pt->maxsteps,ncols) = val;
+      *PTR_2D(pt->table,i,k,ncols,pt->maxsteps) = val;
     }
   }
 
   /* if function of r2, shift potential if necessary */
   if (radial) {
     for (i=0; i<ncols; i++) {
-      delta = *PTR_2D(pt->table,pt->len[i]-1,i,pt->maxsteps,ncols);
+      delta = *PTR_2D(pt->table,i,pt->len[i]-1,ncols,pt->maxsteps);
       if (delta!=0.0) {
         if (0==myid)
           printf("Potential %1d%1d shifted by %e\n",
                  (i/ntypes),(i%ntypes),delta);
         for (k=0; k<pt->len[i]; k++)
-          *PTR_2D(pt->table,k,i,pt->table,ncols) -= delta;
+        	*PTR_2D(pt->table,i,k,ncols,pt->maxsteps) -= delta;
       }
     }
   }
@@ -677,7 +688,7 @@ void create_pot_table(pot_table_t *pt)
               }
 	    }
 #endif /* BUCK */
-            *PTR_2D(pt->table, n, column, pt->maxsteps, ncols) = val;
+            *PTR_2D(pt->table, column, n, ncols, pt->maxsteps) = val;
           }
 	}
         ++column;
@@ -1067,13 +1078,13 @@ void create_coulomb_tables()
     pot -= 0.125*coulf2shift*(SQR(r2)-2.*r2*ew_r2_cut +
 			      SQR(ew_r2_cut));
 #endif
-    *PTR_2D(pt->table,i,cou_col,pt->maxsteps,ncols)=pot;
+    *PTR_2D(pt->table,cou_col,i,ncols,pt->maxsteps)=pot;
 #ifdef DIPOLE
     /* 1/r^3 equiv. deriv of 1/r */
     grad -= coul_fshift;
     grad -= 0.5*coulf2shift*(r2-ew_r2_cut);
     grad /= -coul_eng;
-    *PTR_2D(pt->table,i,sco_col,pt->maxsteps,ncols)=grad;
+    *PTR_2D(pt->table,sco_col,i,ncols,pt->maxsteps)=grad;
     /* Other tables: Short-range dipole fn */
     for(k=0;k<ntypepairs;k++){
       tmp=dp_b[k]*SQRT(r2);
@@ -1083,7 +1094,7 @@ void create_coulomb_tables()
 	pot2 += 1.;
       }
       pot2 *= dp_c[k]*exp(-tmp)* grad;
-      *PTR_2D(pt->table,i,shr_col+k,pt->maxsteps,ncols)=pot2;
+      *PTR_2D(pt->table,shr_col+k,i,ncols,pt->maxsteps)=pot2;
     }
 #endif
   }
@@ -1099,9 +1110,9 @@ void create_coulomb_tables()
     inv_rij = 1.0/rij;
     coul_pot=inv_rij*yuk_expfc;
     // {1/r*exp(-br)*fc} --> coul_table.0
-    *PTR_2D(pt->table,i,0,pt->maxsteps,ncols)=coul_pot;
+    *PTR_2D(pt->table,0,i,ncols,pt->maxsteps)=coul_pot;
     // {fc}              --> coul_table.1 
-    *PTR_2D(pt->table,i,1,pt->maxsteps,ncols)=yuk_fc;
+    *PTR_2D(pt->table,1,i,ncols,pt->maxsteps)=yuk_fc;
 
     for(k=0;k<ntypepairs;k++)
     {
@@ -1114,7 +1125,7 @@ void create_coulomb_tables()
       }
       pot2 *=dp_c[k]*exp(-tmp);
       // {gij} --> coul_table.2,coul_table.3,coul_table.4
-      *PTR_2D(pt->table,i,2+k,pt->maxsteps,ncols)=pot2;
+      *PTR_2D(pt->table,2+k,i,ncols,pt->maxsteps)=pot2;
     }
 
   }
@@ -1170,18 +1181,19 @@ void yukawa_smooth_function(real ke_r,real rcut, real dcut,real *fc,real *dfc)
 
 void init_fourpoint( pot_table_t *pt, int nc )
 {
-  int  col, n;
+  int  col, n, m;
   real *y;
 
   /* loop over columns */
   for (col=0; col<nc; col++) {
 
-    y    = pt->table  + col;
+    y    = pt->table;
     n    = pt->len[col];
+    m    = col*(pt->maxsteps);
 
     /* for security, we continue the last interpolation polynomial */
-    y[ n   *nc] =  4*y[(n-1)*nc]- 6*y[(n-2)*nc]+ 4*y[(n-3)*nc]-  y[(n-4)*nc];
-    y[(n+1)*nc] = 10*y[(n-1)*nc]-20*y[(n-2)*nc]+15*y[(n-3)*nc]-4*y[(n-4)*nc];
+    y[ n   +m] =  4*y[(n-1)+m]- 6*y[(n-2)+m]+ 4*y[(n-3)+m]-  y[(n-4)+m];
+    y[(n+1)+m] = 10*y[(n-1)+m]-20*y[(n-2)+m]+15*y[(n-3)+m]-4*y[(n-4)+m];
 
   }
 }
@@ -1196,7 +1208,7 @@ void init_fourpoint( pot_table_t *pt, int nc )
 
 void init_spline( pot_table_t *pt, int ncols, int radial )
 {
-  int size, col, n, i, k;
+  int size, col, n, i, k, m;
   real p, qn, un, step, *u = NULL, *y, *y2;
 
   /* (re)allocate data */
@@ -1209,18 +1221,19 @@ void init_spline( pot_table_t *pt, int ncols, int radial )
   /* loop over columns */
   for (col=0; col<ncols; col++) {
 
-    y2   = pt->table2 + col;
-    y    = pt->table  + col;
+    y2   = pt->table2;
+    y    = pt->table;
     n    = pt->len[col];
     step = pt->step[col];
+    m    = col*(pt->maxsteps);
 
     /* at the left end, we always take natural splines */
     y2[0] = u[0] = 0;
 
     for (i=1; i<n-1; i++) {
-      p = 0.5 * y2[(i-1)*ncols] + 2.0;
-      y2[i*ncols] = -0.5 / p;
-      u[i] = (y[(i+1)*ncols] - 2*y[i*ncols] + y[(i-1)*ncols]) / step;
+      p = 0.5 * y2[(i-1)+m] + 2.0;
+      y2[i+m] = -0.5 / p;
+      u[i] = (y[(i+1)+m] - 2*y[i+m] + y[(i-1)+m]) / step;
       u[i] = (6.0 * u[i] / (2*step) - 0.5 * u[i-1]) / p;
     }
 
@@ -1228,19 +1241,19 @@ void init_spline( pot_table_t *pt, int ncols, int radial )
        natural splines otherwise */
     if (radial) {
       qn = 0.5;
-      un = (3.0 / step) * (y[(n-2)*ncols] - y[(n-1)*ncols]) / step;
+      un = (3.0 / step) * (y[(n-2)+m] - y[(n-1)+m]) / step;
     }
     else {
       qn = un = 0.0;
     }
 
-    y2[(n-1)*ncols] = (un - qn * u[n-2]) / (qn * y2[(n-2)*ncols] + 1.0);
+    y2[(n-1)+m] = (un - qn * u[n-2]) / (qn * y2[(n-2)+m] + 1.0);
     for (k=n-2; k>=0; k--)
-      y2[k*ncols] = y2[k*ncols] * y2[(k+1)*ncols] + u[k];
+      y2[k+m] = y2[k+m] * y2[(k+1)+m] + u[k];
 
     /* for security, we continue the last interpolation polynomial */
-    y [n*ncols] = 2*y [(n-1)*ncols]-y [(n-2)*ncols]+SQR(step)*y2[(n-1)*ncols];
-    y2[n*ncols] = 2*y2[(n-1)*ncols]-y2[(n-2)*ncols];
+    y [n+m] = 2*y [(n-1)+m]-y [(n-2)+m]+SQR(step)*y2[(n-1)+m];
+    y2[n+m] = 2*y2[(n-1)+m]-y2[(n-2)+m];
 
   }
 }
@@ -1255,18 +1268,18 @@ void init_spline( pot_table_t *pt, int ncols, int radial )
 
 void init_threepoint( pot_table_t *pt, int ncols )
 {
-  int col, n;
+  int col, n, m;
   real *y;
 
   /* loop over columns */
   for (col=0; col<ncols; col++) {
 
-    y    = pt->table  + col;
+    y    = pt->table;
     n    = pt->len[col];
-
+    m    = col*(pt->maxsteps);
     /* for security, we continue the last interpolation polynomial */
-    y[ n   *ncols] = 3*y[(n-1)*ncols] - 3*y[(n-2)*ncols] +   y[(n-3)*ncols];
-    y[(n+1)*ncols] = 6*y[(n-1)*ncols] - 8*y[(n-2)*ncols] + 3*y[(n-3)*ncols];
+    y[ n   + m] = 3*y[(n-1)+m] - 3*y[(n-2)+m] +   y[(n-3)+m];
+    y[(n+1)+ m] = 6*y[(n-1)+m] - 8*y[(n-2)+m] + 3*y[(n-3)+m];
 
   }
 }
@@ -1701,7 +1714,7 @@ void pair_int2(real *pot, real *grad, int *is_short, pot_table_t *pt,
   chi   = (r2a - k * pt->step[col]) * istep;
 
   /* intermediate values */
-  ptr = PTR_2D(pt->table, k, col, pt->maxsteps, inc);
+  ptr = PTR_2D(pt->table, col, k, inc, pt->maxsteps);
   p0  = *ptr; ptr += inc;
   p1  = *ptr; ptr += inc;
   p2  = *ptr;
@@ -1755,7 +1768,7 @@ void pair_int3(real *pot, real *grad, int *is_short, pot_table_t *pt,
   dfac3 =    1.0/6.0 * (3.0*chi*chi-1.0);
 
   /* intermediate values */
-  ptr = PTR_2D(pt->table, k-1, col, pt->maxsteps, inc);
+  ptr = PTR_2D(pt->table, col, k-1, inc, pt->maxsteps);
   p0  = *ptr; ptr += inc;
   p1  = *ptr; ptr += inc;
   p2  = *ptr; ptr += inc;
@@ -1794,7 +1807,7 @@ void val_func2(real *val, int *is_short, pot_table_t *pt,
   chi   = (r2a - k * pt->step[col]) * istep;
 
   /* intermediate values */
-  ptr = PTR_2D(pt->table, k, col, pt->maxsteps, inc);
+  ptr = PTR_2D(pt->table, col, k, inc, pt->maxsteps);
   p0  = *ptr; ptr += inc;
   p1  = *ptr; ptr += inc;
   p2  = *ptr;
@@ -1838,7 +1851,7 @@ void val_func3(real *val, int *is_short, pot_table_t *pt,
   fac3 =  (1.0/6.0) * chi * (chi*chi-1.0);
 
   /* intermediate values */
-  ptr = PTR_2D(pt->table, k-1, col, pt->maxsteps, inc);
+  ptr = PTR_2D(pt->table, col, k-1, inc, pt->maxsteps);
   p0  = *ptr; ptr += inc;
   p1  = *ptr; ptr += inc;
   p2  = *ptr; ptr += inc;
@@ -1875,7 +1888,7 @@ void deriv_func2(real *grad, int *is_short, pot_table_t *pt,
   chi   = (r2a - k * pt->step[col]) * istep;
 
   /* intermediate values */
-  ptr = PTR_2D(pt->table, k, col, pt->maxsteps, inc);
+  ptr = PTR_2D(pt->table, col, k, inc, pt->maxsteps);
   p0  = *ptr; ptr += inc;
   p1  = *ptr; ptr += inc;
   p2  = *ptr;
@@ -1920,7 +1933,7 @@ void deriv_func3(real *grad, int *is_short, pot_table_t *pt,
   dfac3 =    1.0/6.0 * (3.0*chi*chi-1.0);
 
   /* intermediate values */
-  ptr = PTR_2D(pt->table, k-1, col, pt->maxsteps, inc);
+  ptr = PTR_2D(pt->table, col, k-1, inc, pt->maxsteps);
   p0  = *ptr; ptr += inc;
   p1  = *ptr; ptr += inc;
   p2  = *ptr; ptr += inc;

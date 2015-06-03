@@ -27,18 +27,18 @@
 
 void estimate_nblist_size_pairs(int*);
 
-int **cell_i = NULL;
-int **cell_j = NULL;
-int **num_i = NULL;
-int **num_j = NULL;
-int *pairsListLengths = NULL;
-int *pairsListMaxLengths = NULL;
-double *cutoffRadii = NULL;
+int** restrict cell_i = NULL;
+int** restrict cell_j = NULL;
+int** restrict num_i = NULL;
+int** restrict num_j = NULL;
+int* restrict pairsListLengths = NULL;
+int* restrict pairsListMaxLengths = NULL;
+double* restrict cutoffRadii = NULL;
 int initialized = 0;
 
-real *epot = NULL;
-real *grad = NULL;
-real *r2   = NULL;
+real* restrict epot = NULL;
+real* restrict grad = NULL;
+real* restrict r2 = NULL;
 int r2ListSize = 0;
 
 void init(void){
@@ -157,8 +157,8 @@ void estimate_nblist_size_pairs(int *pairs){
 				else jstart = 0;
 
 				q = cell_array + c2;
-
-				for (j = jstart; j < q->n; j++) {
+				const int k = q->n;
+				for (j = jstart; j < k; j++) {
 					vektor d;
 					d.x = ORT(q,j,X) - d1.x;
 					d.y = ORT(q,j,Y) - d1.y;
@@ -188,6 +188,9 @@ void make_nblist(void){
 	for (k = 0; k < ncells; k++) {
 		cell *p = cell_array + cnbrs[k].np;
 		const int n = p->n;
+#ifdef INTEL_SIMD
+#pragma ivdep
+#endif
 		for (i = 0; i < n; i++) {
 			NBL_POS(p, i, X) = ORT(p, i, X);
 			NBL_POS(p, i, Y) = ORT(p, i, Y);
@@ -288,7 +291,7 @@ void make_nblist(void){
 
 void calc_forces(int steps){
 	int i,j,k,n;
-	int nPairs = ntypes*ntypes;
+	const int nPairs = ntypes*ntypes;
 
 	if (!initialized){
 		init();
@@ -462,305 +465,193 @@ void calc_forces(int steps){
 #endif
 			}
 		}
+
+		//TODO Tabelle rho kuerzer als pair?
+
 #ifdef EAM2
-
+		if(n%ntypes == n/ntypes){
+#ifdef INTEL_SIMD
+#pragma ivdep
 #endif
+			for (i=0; i<m; i++){
+				real r = MAX( 0.0, r2[i] - rho_h_tab.begin[n]);
+				VAL_FUNC_VEC(epot[i], rho_h_tab, n, 1, r);
+			}
+		} else {
+			int col1 = n;
+			int col2 = (n % ntypes) * ntypes + (n / ntypes);
+#ifdef INTEL_SIMD
+#pragma ivdep
+#endif
+			for (i=0; i<m; i++){
+				real r = MAX( 0.0, r2[i] - rho_h_tab.begin[col1]);
+				VAL_FUNC_VEC(epot[i], rho_h_tab, col1, 1, r);
+				r = MAX( 0.0, r2[i] - rho_h_tab.begin[col2]);
+				VAL_FUNC_VEC(grad[i], rho_h_tab, col2, 1, r);
+			}
+		}
 
+
+		if(n%ntypes == n/ntypes){
+			for (i=0; i<m; i++){
+				if (r2[i] <= rho_h_tab.end[n]){
+					EAM_RHO(cell_array+cell_i_n[i], num_i_n[i]) += epot[i];
+					EAM_RHO(cell_array+cell_j_n[i], num_j_n[i]) += epot[i];
+				}
+			}
+		} else {
+			for (i=0; i<m; i++){
+				if (r2[i] <= rho_h_tab.end[n]){
+					EAM_RHO(cell_array+cell_i_n[i], num_i_n[i]) += epot[i];
+					EAM_RHO(cell_array+cell_j_n[i], num_j_n[i]) += grad[i];
+				}
+			}
+		}
+#endif
 	}// pairs n
 
+#ifdef EAM2
+	send_forces(add_rho,pack_rho,unpack_add_rho);
+
+	/* compute embedding energy and its derivative */
+	for (k=0; k<ncells; k++) {
+		cell *p = CELLPTR(k);
+		real pot, tmp, tr;
+		const int n=p->n;
+#ifdef INTEL_SIMD
+#pragma ivdep
+#endif
+		for (i=0; i<n; i++) {
+			int sorte = SORTE(p,i);
+			real r = MAX( 0.0, EAM_RHO(p,i) - embed_pot.begin[sorte]);
+			PAIR_INT_VEC(pot, EAM_DF(p,i), embed_pot, sorte, ntypes, r);
+			POTENG(p,i) += pot;
+		}
+	}
+
+	/* distribute derivative of embedding energy */
+	send_cells(copy_dF,pack_dF,unpack_dF);
+
+	//TODO Nicht symmetrische Tabellen
+
+	for (n = 0; n < nPairs; n++) {
+		const int* restrict cell_i_n = cell_i[n];
+		const int* restrict cell_j_n = cell_j[n];
+		const int* restrict num_i_n = num_i[n];
+		const int* restrict num_j_n = num_j[n];
+
+		const int m = pairsListLengths[n];
+
+		const real potBegin = rho_h_tab.begin[n];
+		const real potEnd = rho_h_tab.end[n];
+		const real potEndPlus = rho_h_tab.end[n] + 0.1;
+
+		//Precompute distances
+#ifdef INTEL_SIMD
+#pragma ivdep
+#endif
+		for (i = 0; i < m; i++) {
+			vektor v;
+			cell *p = cell_array + cell_i_n[i];
+			cell *q = cell_array + cell_j_n[i];
+			v.x = ORT(q, num_j_n[i], X) - ORT(p, num_i_n[i], X);
+			v.y = ORT(q, num_j_n[i], Y) - ORT(p, num_i_n[i], Y);
+			v.z = ORT(q, num_j_n[i], Z) - ORT(p, num_i_n[i], Z);
+
+			real r = SPROD(v, v);
+			r2[i] = MIN(potEndPlus, r);
+		}
+
+		if (n % ntypes == n / ntypes) {
+#ifdef INTEL_SIMD
+#pragma ivdep
+#endif
+			for (i = 0; i < m; i++) {
+				real r = MAX(0.0, r2[i] - potBegin);
+				DERIV_FUNC_VEC(epot[i], rho_h_tab, n, 1, r);
+				grad[i] = epot[i];
+
+			}
+		} else {
+			int col1 = n;
+			int col2 = (n % ntypes) * ntypes + (n / ntypes);
+#ifdef INTEL_SIMD
+#pragma ivdep
+#endif
+			for (i = 0; i < m; i++) {
+				real r = MAX(0.0, r2[i] - rho_h_tab.begin[n]);
+				DERIV_FUNC_VEC(epot[i], rho_h_tab, col1, 1, r);
+				DERIV_FUNC_VEC(grad[i], rho_h_tab, col2, 1, r);
+			}
+		}
+
+		for (i = 0; i < m; i++) {
+			vektor v, force;
+
+			if (r2[i] <= rho_h_tab.end[n]) {
+				cell *p = cell_array + cell_i_n[i];
+				cell *q = cell_array + cell_j_n[i];
+				v.x = ORT(q, num_j_n[i], X) - ORT(p, num_i_n[i], X);
+				v.y = ORT(q, num_j_n[i], Y) - ORT(p, num_i_n[i], Y);
+				v.z = ORT(q, num_j_n[i], Z) - ORT(p, num_i_n[i], Z);
+
+				real grad_df = 0.5 * (EAM_DF(p,num_i_n[i]) * epot[i] + EAM_DF(q,num_j_n[i]) * grad[i]);
+
+				force.x = v.x * grad_df;
+				force.y = v.y * grad_df;
+				force.z = v.z * grad_df;
+
+				KRAFT(q, num_j_n[i],X) -= force.x;
+				KRAFT(q, num_j_n[i],Y) -= force.y;
+				KRAFT(q, num_j_n[i],Z) -= force.z;
+
+				KRAFT(p, num_i_n[i],X) += force.x;
+				KRAFT(p, num_i_n[i],Y) += force.y;
+				KRAFT(p, num_i_n[i],Z) += force.z;
+
+#ifdef P_AXIAL
+				vir_xx -= v.x * force.x;
+				vir_yy -= v.y * force.y;
+				vir_zz -= v.z * force.z;
+#else
+				virial       -= SPROD(v,force);
+#endif
+
+#ifdef STRESS_TENS
+				if (do_press_calc) {
+					/* avoid double counting of the virial */
+					force.x *= 0.5;
+					force.y *= 0.5;
+					force.z *= 0.5;
+
+					PRESSTENS(p, num_i_n[i],xx) -= v.x * force.x;
+					PRESSTENS(q, num_j_n[i],xx) -= v.x * force.x;
+					PRESSTENS(p, num_i_n[i],yy) -= v.y * force.y;
+					PRESSTENS(q, num_j_n[i],yy) -= v.y * force.y;
+					PRESSTENS(p, num_i_n[i],xy) -= v.x * force.y;
+					PRESSTENS(q, num_j_n[i],xy) -= v.x * force.y;
+					PRESSTENS(p, num_i_n[i],zz) -= v.z * force.z;
+					PRESSTENS(q, num_j_n[i],zz) -= v.z * force.z;
+					PRESSTENS(p, num_i_n[i],yz) -= v.y * force.z;
+					PRESSTENS(q, num_j_n[i],yz) -= v.y * force.z;
+					PRESSTENS(p, num_i_n[i],zx) -= v.z * force.x;
+					PRESSTENS(q, num_j_n[i],zx) -= v.z * force.x;
+				}
+#endif
+			}
+		}
+	}//n pairs
+
+#endif //EAM2
 
 	//Sum total potential energy
 	for (k=0; k<nallcells; k++) {
 		cell *p = cell_array+k;
 		int i;
-		for (i=0; i<p->n; i++)
+		const int n = p->n;
+		for (i=0; i<n; i++)
 			tot_pot_energy += POTENG(p,i);
 	}
-
-//	/* pair interactions - for all atoms */
-//	n = 0;
-//	for (k = 0; k < ncells; k++) {
-//		cell *p = cell_array + cnbrs[k].np;
-//		for (i = 0; i < p->n; i++) {
-//
-//#ifdef STRESS_TENS
-//			sym_tensor pp = {0.0,0.0,0.0,0.0,0.0,0.0};
-//#endif
-//
-//			vektor d1, ff = {0.0, 0.0, 0.0};
-//			real ee = 0.0;
-//			real eam_r = 0.0, eam_p = 0.0;
-//			int m, it, nb = 0;
-//
-//			d1.x = ORT(p, i, X);
-//			d1.y = ORT(p, i, Y);
-//			d1.z = ORT(p, i, Z);
-//
-//			it = SORTE(p, i);
-//
-//			/* loop over neighbors */
-//			for (m = tl[n]; m < tl[n + 1]; m++) {
-//
-//				vektor d, force;
-//				cell *q;
-//				real pot, grad, r2, rho_h;
-//				int c, j, jt, col, col2, inc = ntypes * ntypes;
-//
-//				c = cl_num[tb[m]];
-//				j = tb[m] - cl_off[c];
-//				q = cell_array + c;
-//
-//				d.x = ORT(q,j,X) - d1.x;
-//				d.y = ORT(q,j,Y) - d1.y;
-//				d.z = ORT(q,j,Z) - d1.z;
-//
-//				r2 = SPROD(d, d);
-//				jt = SORTE(q, j);
-//				col = it * ntypes + jt;
-//				col2 = jt * ntypes + it;
-//
-//				/* compute pair interactions */
-//				if (r2 <= pair_pot.end[col]) {
-//					PAIR_INT(pot, grad, pair_pot, col, inc, r2, is_short);
-//
-//					tot_pot_energy += pot;
-//					force.x = d.x * grad;
-//					force.y = d.y * grad;
-//					force.z = d.z * grad;
-//
-//					KRAFT(q,j,X) -= force.x;
-//					KRAFT(q,j,Y) -= force.y;
-//					KRAFT(q,j,Z) -= force.z;
-//
-//					ff.x += force.x;
-//					ff.y += force.y;
-//					ff.z += force.z;
-//
-//					pot *= 0.5; /* avoid double counting */
-//					ee += pot;
-//					POTENG(q,j) += pot;
-//#ifdef P_AXIAL
-//					vir_xx -= d.x * force.x;
-//					vir_yy -= d.y * force.y;
-//					vir_zz -= d.z * force.z;
-//#else
-//					virial -= r2 * grad;
-//#endif
-//
-//#ifdef STRESS_TENS
-//					if (do_press_calc) {
-//						/* avoid double counting of the virial */
-//						force.x *= 0.5;
-//						force.y *= 0.5;
-//						force.z *= 0.5;
-//
-//						pp.xx -= d.x * force.x;
-//						PRESSTENS(q,j,xx) -= d.x * force.x;
-//						pp.yy -= d.y * force.y;
-//						PRESSTENS(q,j,yy) -= d.y * force.y;
-//						pp.xy -= d.x * force.y;
-//						PRESSTENS(q,j,xy) -= d.x * force.y;
-//						pp.zz -= d.z * force.z;
-//						PRESSTENS(q,j,zz) -= d.z * force.z;
-//						pp.yz -= d.y * force.z;
-//						PRESSTENS(q,j,yz) -= d.y * force.z;
-//						pp.zx -= d.z * force.x;
-//						PRESSTENS(q,j,zx) -= d.z * force.x;
-//					}
-//#endif
-//				}
-//
-//#ifdef EAM2
-//				/* compute host electron density */
-//				if (r2 < rho_h_tab.end[col]) {
-//					VAL_FUNC(rho_h, rho_h_tab, col, inc, r2, is_short);
-//					eam_r += rho_h;
-//				}
-//				if (it==jt) {
-//					if (r2 < rho_h_tab.end[col]) {
-//						EAM_RHO(q,j) += rho_h;
-//					}
-//				} else {
-//					if (r2 < rho_h_tab.end[col2]) {
-//						VAL_FUNC(rho_h, rho_h_tab, col2, inc, r2, is_short);
-//						EAM_RHO(q,j) += rho_h;
-//					}
-//				}
-//#endif
-//
-//			}
-//			KRAFT(p,i,X) += ff.x;
-//			KRAFT(p,i,Y) += ff.y;
-//			KRAFT(p,i,Z) += ff.z;
-//
-//			POTENG(p,i) += ee;
-//
-//#ifdef EAM2
-//			EAM_RHO(p,i) += eam_r;
-//#endif
-//
-//#ifdef STRESS_TENS
-//			if (do_press_calc) {
-//				PRESSTENS(p,i,xx) += pp.xx;
-//				PRESSTENS(p,i,yy) += pp.yy;
-//				PRESSTENS(p,i,xy) += pp.xy;
-//				PRESSTENS(p,i,zz) += pp.zz;
-//				PRESSTENS(p,i,yz) += pp.yz;
-//				PRESSTENS(p,i,zx) += pp.zx;
-//			}
-//#endif
-//			n++;
-//		}
-//	}
-//	if (is_short) fprintf(stderr, "Short distance, pair, step %d!\n", steps);
-//
-//#ifdef EAM2
-//
-//	/* collect host electron density */
-//	send_forces(add_rho,pack_rho,unpack_add_rho);
-//
-//	/* compute embedding energy and its derivative */
-//	for (k=0; k<ncells; k++) {
-//		cell *p = CELLPTR(k);
-//		real pot, tmp, tr;
-//
-//		for (i=0; i<p->n; i++) {
-//			PAIR_INT( pot, EAM_DF(p,i), embed_pot, SORTE(p,i),
-//					ntypes, EAM_RHO(p,i), idummy);
-//			POTENG(p,i) += pot;
-//			tot_pot_energy += pot;
-//		}
-//	}
-//
-//	/* distribute derivative of embedding energy */
-//	send_cells(copy_dF,pack_dF,unpack_dF);
-//
-//	/* EAM interactions - for all atoms */
-//	n=0;
-//	for (k=0; k<ncells; k++) {
-//		cell *p = CELLPTR(k);
-//		for (i=0; i<p->n; i++) {
-//
-//#ifdef STRESS_TENS
-//			sym_tensor pp = {0.0,0.0,0.0,0.0,0.0,0.0};
-//#endif
-//			vektor d1, ff = {0.0,0.0,0.0};
-//			int m, it;
-//
-//			d1.x = ORT(p,i,X);
-//			d1.y = ORT(p,i,Y);
-//			d1.z = ORT(p,i,Z);
-//
-//			it = SORTE(p,i);
-//
-//			/* loop over neighbors */
-//			for (m=tl[n]; m<tl[n+1]; m++) {
-//
-//				vektor d, force = {0.0,0.0,0.0};
-//				real r2;
-//				int c, j, jt, col1, col2, inc = ntypes * ntypes, have_force=0;
-//				cell *q;
-//
-//				c = cl_num[ tb[m] ];
-//				j = tb[m] - cl_off[c];
-//				q = cell_array + c;
-//
-//				d.x = ORT(q,j,X) - d1.x;
-//				d.y = ORT(q,j,Y) - d1.y;
-//				d.z = ORT(q,j,Z) - d1.z;
-//				r2 = SPROD(d,d);
-//				jt = SORTE(q,j);
-//				col1 = jt * ntypes + it;
-//				col2 = it * ntypes + jt;
-//
-//				if ((r2 < rho_h_tab.end[col1]) || (r2 < rho_h_tab.end[col2])) {
-//
-//					real pot, grad, rho_i_strich, rho_j_strich, rho_i, rho_j;
-//
-//					/* take care: particle i gets its rho from particle j.    */
-//					/* This is tabulated in column it*ntypes+jt.              */
-//					/* Here we need the giving part from column jt*ntypes+it. */
-//
-//					/* rho_strich_i(r_ij) */
-//					/* rho_strich_i(r_ij) and rho_i(r_ij) */
-//					PAIR_INT(rho_i, rho_i_strich, rho_h_tab, col1, inc, r2, is_short);
-//
-//					/* rho_strich_j(r_ij) */
-//					if (col1==col2) {
-//						rho_j_strich = rho_i_strich;
-//					} else {
-//						DERIV_FUNC(rho_j_strich, rho_h_tab, col2, inc, r2, is_short);
-//					}
-//
-//					/* put together (dF_i and dF_j are by 0.5 too big) */
-//					grad = 0.5 * (EAM_DF(p,i)*rho_j_strich + EAM_DF(q,j)*rho_i_strich);
-//
-//					/* store force in temporary variable */
-//					force.x = d.x * grad;
-//					force.y = d.y * grad;
-//					force.z = d.z * grad;
-//					have_force=1;
-//				}
-//
-//				/* accumulate forces */
-//				if (have_force) {
-//					KRAFT(q,j,X) -= force.x;
-//					KRAFT(q,j,Y) -= force.y;
-//					KRAFT(q,j,Z) -= force.z;
-//					ff.x += force.x;
-//					ff.y += force.y;
-//					ff.z += force.z;
-//#ifdef P_AXIAL
-//					vir_xx -= d.x * force.x;
-//					vir_yy -= d.y * force.y;
-//					vir_zz -= d.z * force.z;
-//#else
-//					virial -= SPROD(d,force);
-//#endif
-//
-//#ifdef STRESS_TENS
-//					if (do_press_calc) {
-//						/* avoid double counting of the virial */
-//						force.x *= 0.5;
-//						force.y *= 0.5;
-//						force.z *= 0.5;
-//
-//						pp.xx -= d.x * force.x;
-//						pp.yy -= d.y * force.y;
-//						pp.zz -= d.z * force.z;
-//						pp.yz -= d.y * force.z;
-//						pp.zx -= d.z * force.x;
-//						pp.xy -= d.x * force.y;
-//
-//						PRESSTENS(q,j,xx) -= d.x * force.x;
-//						PRESSTENS(q,j,yy) -= d.y * force.y;
-//						PRESSTENS(q,j,zz) -= d.z * force.z;
-//						PRESSTENS(q,j,yz) -= d.y * force.z;
-//						PRESSTENS(q,j,zx) -= d.z * force.x;
-//						PRESSTENS(q,j,xy) -= d.x * force.y;
-//					}
-//#endif
-//				}
-//			}
-//			KRAFT(p,i,X) += ff.x;
-//			KRAFT(p,i,Y) += ff.y;
-//			KRAFT(p,i,Z) += ff.z;
-//#ifdef STRESS_TENS
-//			if (do_press_calc) {
-//				PRESSTENS(p,i,xx) += pp.xx;
-//				PRESSTENS(p,i,yy) += pp.yy;
-//				PRESSTENS(p,i,zz) += pp.zz;
-//				PRESSTENS(p,i,yz) += pp.yz;
-//				PRESSTENS(p,i,zx) += pp.zx;
-//				PRESSTENS(p,i,xy) += pp.xy;
-//			}
-//#endif
-//			n++;
-//		}
-//	}
-//	if (is_short) fprintf(stderr, "\n Short distance, EAM, step %d!\n",steps);
-//
-//#endif /* EAM2 */
 
 #ifdef MPI
 	real tmpvec1[8], tmpvec2[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -804,7 +695,8 @@ void check_nblist(){
 	for (k = 0; k < NCELLS; k++) {
 		int i;
 		cell *p = CELLPTR(k);
-		for (i = 0; i < p->n; i++) {
+		const int n = p->n;
+		for (i = 0; i < n; i++) {
 			d.x = ORT(p,i,X) - NBL_POS(p, i, X);
 			d.y = ORT(p,i,Y) - NBL_POS(p, i, Y);
 			d.z = ORT(p,i,Z) - NBL_POS(p, i, Z);

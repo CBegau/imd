@@ -105,6 +105,10 @@ int initialized = 0;
 
 real* restrict epot = NULL;
 real* restrict grad = NULL;
+#ifdef EAM2
+real* restrict aux1 = NULL;
+real* restrict aux2 = NULL;
+#endif
 real* restrict r2 = NULL;
 int r2ListSize = 0;
 
@@ -160,6 +164,10 @@ void deallocate_nblist(void){
 		free(epot);
 		free(grad);
 		free(r2);
+#ifdef EAM2
+		free(aux1);
+		free(aux2);
+#endif
 		r2ListSize = 0;
 	}
 
@@ -407,20 +415,28 @@ void calc_forces(int steps){
 #endif
 
 
-	int maxList = 0;
+	int sumList = 0;
 	for (i = 0; i<nPairs; i++)
-		maxList = MAX(pairsListLengths[i],maxList);
+		sumList += pairsListLengths[i];
 
-	if(maxList>r2ListSize){
-		r2ListSize = (int)(nbl_size*maxList);
+	if(sumList>r2ListSize){
+		r2ListSize = (int)(nbl_size*sumList);
 		if(grad) free(grad);
 		if(epot) free(epot);
 		if(r2) free(r2);
 		epot = malloc(r2ListSize * sizeof *epot);
 		grad = malloc(r2ListSize * sizeof *grad);
 		r2   = malloc(r2ListSize * sizeof *r2);
+
+#ifdef EAM2
+		if(aux1) free(aux1);
+		if(aux2) free(aux2);
+		aux1 = malloc(r2ListSize * sizeof *aux1);
+		aux2 = malloc(r2ListSize * sizeof *aux2);
+#endif
 	}
 
+	int startIndex = 0;
 	for (n = 0; n<nPairs; n++){
 		const int* restrict pair = cell_num[n];
 
@@ -439,32 +455,34 @@ void calc_forces(int steps){
 #ifdef INTEL_SIMD
 #pragma ivdep
 #endif
-		for (i=0; i<m; i++){
+		for (i=startIndex; i<startIndex+m; i++){
+			int l = i-startIndex;
 			vektor v;
-			cell *p = cell_array+pair[4*i  ];
-			cell *q = cell_array+pair[4*i+1];
-			v.x = ORT(q, pair[4*i+3], X) - ORT(p, pair[4*i+2], X);
-			v.y = ORT(q, pair[4*i+3], Y) - ORT(p, pair[4*i+2], Y);
-			v.z = ORT(q, pair[4*i+3], Z) - ORT(p, pair[4*i+2], Z);
+			cell *p = cell_array+pair[4*l  ];
+			cell *q = cell_array+pair[4*l+1];
+			v.x = ORT(q, pair[4*l+3], X) - ORT(p, pair[4*l+2], X);
+			v.y = ORT(q, pair[4*l+3], Y) - ORT(p, pair[4*l+2], Y);
+			v.z = ORT(q, pair[4*l+3], Z) - ORT(p, pair[4*l+2], Z);
 			real r = SPROD(v,v);
 			r2[i] = MIN(potEndPlus, r);
 		}
 #ifdef INTEL_SIMD
 #pragma ivdep
 #endif
-		for (i=0; i<m; i++){
+		for (i=startIndex; i<startIndex+m; i++){
 			real r = MAX( 0.0, r2[i] - potBegin);
-			PAIR_INT_VEC(epot[i], grad[i], pair_pot, n, 1, r);
+			PAIR_INT_VEC(epot[i], grad[i], pair_pot, col1, 1, r);
 		}
 
-		for (i=0; i<m; i++){
+		for (i=startIndex; i<startIndex+m; i++){
 			vektor v, force;
 
 			if (r2[i] <= potEnd){
-				cell *p = cell_array+pair[4*i  ];
-				cell *q = cell_array+pair[4*i+1];
-				int n_i = pair[4*i+2];
-				int n_j = pair[4*i+3];
+				int l = i-startIndex;
+				cell *p = cell_array+pair[4*l  ];
+				cell *q = cell_array+pair[4*l+1];
+				int n_i = pair[4*l+2];
+				int n_j = pair[4*l+3];
 
 				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
 				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
@@ -524,39 +542,42 @@ void calc_forces(int steps){
 #ifdef INTEL_SIMD
 #pragma ivdep
 #endif
-			for (i=0; i<m; i++){
-				real r = MAX( 0.0, r2[i] - rho_h_tab.begin[n]);
-				VAL_FUNC_VEC(epot[i], rho_h_tab, n, 1, r);
+			for (i=startIndex; i<startIndex+m; i++){
+				real r = MAX( 0.0, r2[i] - rho_h_tab.begin[col1]);
+				PAIR_INT_VEC(epot[i], aux1[i], rho_h_tab, n, 1, r);
 			}
 		} else {
 #ifdef INTEL_SIMD
 #pragma ivdep
 #endif
-			for (i=0; i<m; i++){
+			for (i=startIndex; i<startIndex+m; i++){
 				real r = MAX( 0.0, r2[i] - rho_h_tab.begin[col1]);
-				VAL_FUNC_VEC(epot[i], rho_h_tab, col1, 1, r);
+				PAIR_INT_VEC(epot[i], aux1[i], rho_h_tab, col1, 1, r);
 				r = MAX( 0.0, r2[i] - rho_h_tab.begin[col2]);
-				VAL_FUNC_VEC(grad[i], rho_h_tab, col2, 1, r);
+				PAIR_INT_VEC(grad[i], aux2[i], rho_h_tab, col2, 1, r);
 			}
 		}
 
 
 		if(type1 == type2){
-			for (i=0; i<m; i++){
-				if (r2[i] <= rho_h_tab.end[n]){
-					EAM_RHO(cell_array+pair[4*i+0], pair[4*i+2]) += epot[i];
-					EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += epot[i];
+			for (i=n*m; i<(n+1)*m; i++){
+				if (r2[i] <= rho_h_tab.end[col1]){
+					int l = i-startIndex;
+					EAM_RHO(cell_array+pair[4*l+0], pair[4*l+2]) += epot[i];
+					EAM_RHO(cell_array+pair[4*l+1], pair[4*l+3]) += epot[i];
 				}
 			}
 		} else {
-			for (i=0; i<m; i++){
+			for (i=startIndex; i<startIndex+m; i++){
+				int l = i-startIndex;
 				if (r2[i] <= rho_h_tab.end[col1])
-					EAM_RHO(cell_array+pair[4*i+0], pair[4*i+2]) += epot[i];
+					EAM_RHO(cell_array+pair[4*l+0], pair[4*l+2]) += epot[i];
 				if (r2[i] <= rho_h_tab.end[col2])
-					EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += grad[i];
+					EAM_RHO(cell_array+pair[4*l+1], pair[4*l+3]) += grad[i];
 			}
 		}
 #endif
+		startIndex+=m;
 	}// pairs n
 
 #ifdef EAM2
@@ -581,8 +602,7 @@ void calc_forces(int steps){
 	/* distribute derivative of embedding energy */
 	send_cells(copy_dF,pack_dF,unpack_dF);
 
-	//TODO Nicht symmetrische Tabellen
-
+	startIndex = 0;
 	for (n = 0; n < nPairs; n++) {
 		const int* restrict pair = cell_num[n];
 
@@ -597,60 +617,25 @@ void calc_forces(int steps){
 		const int col1 = n;
 		const int col2 = type2 * ntypes + type1;
 
-		//Precompute distances
-#ifdef INTEL_SIMD
-#pragma ivdep
-#endif
-		for (i = 0; i < m; i++) {
-			vektor v;
-			cell *p = cell_array+pair[4*i  ];
-			cell *q = cell_array+pair[4*i+1];
-			v.x = ORT(q, pair[4*i+3], X) - ORT(p, pair[4*i+2], X);
-			v.y = ORT(q, pair[4*i+3], Y) - ORT(p, pair[4*i+2], Y);
-			v.z = ORT(q, pair[4*i+3], Z) - ORT(p, pair[4*i+2], Z);
-
-			real r = SPROD(v, v);
-			r2[i] = MIN(potEndPlus, r);
-		}
-
-		if (type1 == type2) {
-#ifdef INTEL_SIMD
-#pragma ivdep
-#endif
-			for (i = 0; i < m; i++) {
-				real r = MAX(0.0, r2[i] - potBegin);
-				DERIV_FUNC_VEC(epot[i], rho_h_tab, n, 1, r);
-				grad[i] = epot[i];
-
-			}
-		} else {
-			int col1 = n;
-			int col2 = (n % ntypes) * ntypes + (n / ntypes);
-#ifdef INTEL_SIMD
-#pragma ivdep
-#endif
-			for (i = 0; i < m; i++) {
-				real r = MAX(0.0, r2[i] - rho_h_tab.begin[col1]);
-				DERIV_FUNC_VEC(epot[i], rho_h_tab, col1, 1, r);
-				r = MAX(0.0, r2[i] - rho_h_tab.begin[col2]);
-				DERIV_FUNC_VEC(grad[i], rho_h_tab, col2, 1, r);
-			}
-		}
-
 		real rhoCut = MAX(rho_h_tab.end[col1], rho_h_tab.end[col2]);
-		for (i = 0; i < m; i++) {
+		for (i=startIndex; i<startIndex+m; i++) {
 			vektor v, force;
 
 			if (r2[i] <= rhoCut) {
-				cell *p = cell_array+pair[4*i  ];
-				cell *q = cell_array+pair[4*i+1];
-				int n_i = pair[4*i+2];
-				int n_j = pair[4*i+3];
+				int l = i-startIndex;
+				cell *p = cell_array+pair[4*l  ];
+				cell *q = cell_array+pair[4*l+1];
+				int n_i = pair[4*l+2];
+				int n_j = pair[4*l+3];
 				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
 				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
 				v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
 
-				real grad_df = 0.5 * (EAM_DF(p,n_i) * epot[i] + EAM_DF(q,n_j) * grad[i]);
+				real grad_df;
+				if (type1==type2)
+					grad_df = 0.5 * (EAM_DF(p,n_i)+ EAM_DF(q,n_j)) * aux1[i];
+				else
+					grad_df = 0.5 * (EAM_DF(p,n_i) * aux1[i] + EAM_DF(q,n_j) * aux2[i]);
 
 				force.x = v.x * grad_df;
 				force.y = v.y * grad_df;
@@ -695,6 +680,7 @@ void calc_forces(int steps){
 #endif
 			}
 		}
+		startIndex+=m;
 	}//n pairs
 
 #endif //EAM2

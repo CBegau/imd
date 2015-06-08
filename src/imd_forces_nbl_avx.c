@@ -430,6 +430,11 @@ void calc_forces(int steps){
 		const real potEnd = pair_pot.end[n];
 		const real potEndPlus = pair_pot.end[n]+0.1;
 
+		const int type1 = n / ntypes;
+		const int type2 = n % ntypes;
+		const int col1 = n;
+		const int col2 = type2 * ntypes + type1;
+
 		//Precompute distances
 #ifdef INTEL_SIMD
 #pragma ivdep
@@ -515,7 +520,7 @@ void calc_forces(int steps){
 		//TODO Tabelle rho kuerzer als pair?
 
 #ifdef EAM2
-		if(n%ntypes == n/ntypes){
+		if(type1 == type2){
 #ifdef INTEL_SIMD
 #pragma ivdep
 #endif
@@ -524,8 +529,6 @@ void calc_forces(int steps){
 				VAL_FUNC_VEC(epot[i], rho_h_tab, n, 1, r);
 			}
 		} else {
-			int col1 = n;
-			int col2 = (n % ntypes) * ntypes + (n / ntypes);
 #ifdef INTEL_SIMD
 #pragma ivdep
 #endif
@@ -538,7 +541,7 @@ void calc_forces(int steps){
 		}
 
 
-		if(n%ntypes == n/ntypes){
+		if(type1 == type2){
 			for (i=0; i<m; i++){
 				if (r2[i] <= rho_h_tab.end[n]){
 					EAM_RHO(cell_array+pair[4*i+0], pair[4*i+2]) += epot[i];
@@ -547,10 +550,10 @@ void calc_forces(int steps){
 			}
 		} else {
 			for (i=0; i<m; i++){
-				if (r2[i] <= rho_h_tab.end[n]){
+				if (r2[i] <= rho_h_tab.end[col1])
 					EAM_RHO(cell_array+pair[4*i+0], pair[4*i+2]) += epot[i];
+				if (r2[i] <= rho_h_tab.end[col2])
 					EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += grad[i];
-				}
 			}
 		}
 #endif
@@ -589,6 +592,11 @@ void calc_forces(int steps){
 		const real potEnd = rho_h_tab.end[n];
 		const real potEndPlus = rho_h_tab.end[n] + 0.1;
 
+		const int type1 = n / ntypes;
+		const int type2 = n % ntypes;
+		const int col1 = n;
+		const int col2 = type2 * ntypes + type1;
+
 		//Precompute distances
 #ifdef INTEL_SIMD
 #pragma ivdep
@@ -605,7 +613,7 @@ void calc_forces(int steps){
 			r2[i] = MIN(potEndPlus, r);
 		}
 
-		if (n % ntypes == n / ntypes) {
+		if (type1 == type2) {
 #ifdef INTEL_SIMD
 #pragma ivdep
 #endif
@@ -622,16 +630,18 @@ void calc_forces(int steps){
 #pragma ivdep
 #endif
 			for (i = 0; i < m; i++) {
-				real r = MAX(0.0, r2[i] - rho_h_tab.begin[n]);
+				real r = MAX(0.0, r2[i] - rho_h_tab.begin[col1]);
 				DERIV_FUNC_VEC(epot[i], rho_h_tab, col1, 1, r);
+				r = MAX(0.0, r2[i] - rho_h_tab.begin[col2]);
 				DERIV_FUNC_VEC(grad[i], rho_h_tab, col2, 1, r);
 			}
 		}
 
+		real rhoCut = MAX(rho_h_tab.end[col1], rho_h_tab.end[col2]);
 		for (i = 0; i < m; i++) {
 			vektor v, force;
 
-			if (r2[i] <= rho_h_tab.end[n]) {
+			if (r2[i] <= rhoCut) {
 				cell *p = cell_array+pair[4*i  ];
 				cell *q = cell_array+pair[4*i+1];
 				int n_i = pair[4*i+2];

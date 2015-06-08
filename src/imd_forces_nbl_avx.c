@@ -23,6 +23,76 @@
 #include "imd.h"
 #include "potaccess.h"
 
+#define PAIR_INT_VEC(pot, grd, pt, col, inc, r2)                             \
+{                                                                            \
+  real r2a, istep, chi, p0, p1, p2, dv, d2v, *ptr;                           \
+  int kk;                                                                   \
+                                                                             \
+  /* indices into potential table */                                         \
+  istep = (pt).invstep[col];                                                 \
+  r2a   = r2 * istep;                                                        \
+  kk    = (int) (r2a);                                                       \
+  chi   = r2a - kk;                                                          \
+                                                                             \
+  /* intermediate values */                                                  \
+  ptr = PTR_2D((pt).table, (col),kk, (inc),(pt).maxsteps);                   \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
+  p2  = *ptr;                                                                \
+  dv  = p1 - p0;                                                             \
+  d2v = p2 - 2. * p1 + p0;                                                    \
+                                                                             \
+  /* potential and twice the derivative */                                   \
+  pot = p0 + chi * dv + 0.5 * chi * (chi - 1.) * d2v;                         \
+  grd = 2. * istep * (dv + (chi - 0.5) * d2v);                                \
+}
+
+#define VAL_FUNC_VEC(pot, pt, col, inc, r2)                                  \
+{                                                                            \
+  real r2a, istep, chi, p0, p1, p2, dv, d2v, *ptr;                           \
+  int kk;                                                                   \
+                                                                             \
+  /* indices into potential table */                                         \
+  istep = (pt).invstep[col];                                                 \
+  r2a   = r2 * istep;                                                        \
+  kk    = (int) (r2a);                                                      \
+  chi   = r2a - kk;                                                          \
+                                                                             \
+  /* intermediate values */                                                  \
+  ptr = PTR_2D((pt).table, (col), kk, (inc), (pt).maxsteps);                 \
+  p0  = *ptr; ptr ++;                                                        \
+  p1  = *ptr; ptr ++;                                                        \
+  p2  = *ptr;                                                                \
+  dv  = p1 - p0;                                                             \
+  d2v = p2 - 2. * p1 + p0;                                                    \
+                                                                             \
+  /* potential value */                                                      \
+  pot = p0 + chi * dv + 0.5 * chi * (chi - 1.) * d2v;                         \
+}
+
+#define DERIV_FUNC_VEC(grd, pt, col, inc, r2)                                \
+{                                                                            \
+  real r2a, istep, chi, p0, p1, p2, dv, d2v, *ptr;                           \
+  int kk;                                                                   \
+                                                                             \
+  /* indices into potential table */                                         \
+  istep = (pt).invstep[col];                                                 \
+  r2a   = r2 * istep;                                                        \
+  kk    = (int) (r2a);                                                      \
+  chi   = r2a - kk;                                                          \
+                                                                             \
+  /* intermediate values */                                                  \
+  ptr = PTR_2D((pt).table, (col), kk, (inc), (pt).maxsteps);                 \
+  p0  = *ptr; ptr ++;                                                       \
+  p1  = *ptr; ptr ++;                                                       \
+  p2  = *ptr;                                                                \
+  dv  = p1 - p0;                                                             \
+  d2v = p2 - 2. * p1 + p0;                                                    \
+                                                                             \
+  /* twice the derivative */                                                 \
+  grd = 2. * istep * (dv + (chi - 0.5) * d2v);                                \
+}
+
 #define NBLMINLEN 10000
 
 void estimate_nblist_size_pairs(int*);

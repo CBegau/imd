@@ -97,10 +97,7 @@
 
 void estimate_nblist_size_pairs(int*);
 
-int** restrict cell_i = NULL;
-int** restrict cell_j = NULL;
-int** restrict num_i = NULL;
-int** restrict num_j = NULL;
+int** restrict cell_num = NULL;
 int* restrict pairsListLengths = NULL;
 int* restrict pairsListMaxLengths = NULL;
 double* restrict cutoffRadii = NULL;
@@ -135,17 +132,10 @@ void init(void){
 		}
 	}
 
-	cell_i = malloc(n * sizeof *cell_i);
-	cell_j = malloc(n * sizeof *cell_j);
-	num_i  = malloc(n * sizeof *num_i);
-	num_j  = malloc(n * sizeof *num_j);
+	cell_num = malloc(n * sizeof *cell_num);
 
-	for (i=0; i<n; i++){
-		cell_i[i] = NULL;
-		cell_j[i] = NULL;
-		num_i [i] = NULL;
-		num_j [i] = NULL;
-	}
+	for (i=0; i<n; i++)
+		cell_num[i] = NULL;
 
 	initialized = 1;
 }
@@ -159,17 +149,10 @@ void init(void){
 void deallocate_nblist(void){
 	if (!initialized) return;
 	int i;
-	for (i=0; i<ntypes * ntypes;i++){
-		free(cell_i[i]);
-		free(cell_j[i]);
-		free(num_i[i]);
-		free(num_j[i]);
-	}
+	for (i=0; i<ntypes * ntypes;i++)
+		free(cell_num[i]);
 
-	free(cell_i);
-	free(cell_j);
-	free(num_i);
-	free(num_j);
+	free(cell_num);
 	free(pairsListLengths);
 	free(cutoffRadii);
 
@@ -278,17 +261,11 @@ void make_nblist(void){
 		int size = MAX( (int)(nbl_size * pairsListLengths[j]), NBLMINLEN);
 		if( size > pairsListMaxLengths[j]){
 			pairsListMaxLengths[j] = size;
-			if (cell_i[j]) free(cell_i[j]);
-			if (cell_j[j]) free(cell_j[j]);
-			if (num_i[j]) free(num_i[j]);
-			if (num_j[j]) free(num_j[j]);
+			if (cell_num[j]) free(cell_num[j]);
 
-			cell_i[j] = malloc(size * sizeof *cell_i[j]);
-			cell_j[j] = malloc(size * sizeof *cell_j[j]);
-			num_i[j]  = malloc(size * sizeof *num_i[j]);
-			num_j[j]  = malloc(size * sizeof *num_j[j]);
+			cell_num[j] = malloc(4 * size * sizeof *cell_num[j]);
 
-			if (cell_i[j]==NULL || cell_j[j] == NULL || num_i[j] == NULL || num_j[j] == NULL){
+			if (cell_num[j]==NULL){
 				error("Cannot allocate neighbor pair list");
 			}
 		}
@@ -339,10 +316,10 @@ void make_nblist(void){
 					n = is*ntypes + js;
 					if (r2 <= cutoffRadii[n]) {
 						k = pairsListLengths[n]++;
-						cell_i[n][k] = c1;
-						cell_j[n][k] = c2;
-						num_i[n][k] = i;
-						num_j[n][k] = j;
+						cell_num[n][4*k  ] = c1;
+						cell_num[n][4*k+1] = c2;
+						cell_num[n][4*k+2] = i;
+						cell_num[n][4*k+3] = j;
 					}
 				}
 			}
@@ -445,10 +422,7 @@ void calc_forces(int steps){
 	}
 
 	for (n = 0; n<nPairs; n++){
-		const int* restrict cell_i_n = cell_i[n];
-		const int* restrict cell_j_n = cell_j[n];
-		const int* restrict num_i_n = num_i[n];
-		const int* restrict num_j_n = num_j[n];
+		const int* restrict pair = cell_num[n];
 
 		const int m = pairsListLengths[n];
 
@@ -462,12 +436,11 @@ void calc_forces(int steps){
 #endif
 		for (i=0; i<m; i++){
 			vektor v;
-			cell *p = cell_array+cell_i_n[i];
-			cell *q = cell_array+cell_j_n[i];
-			v.x = ORT(q, num_j_n[i], X) - ORT(p, num_i_n[i], X);
-			v.y = ORT(q, num_j_n[i], Y) - ORT(p, num_i_n[i], Y);
-			v.z = ORT(q, num_j_n[i], Z) - ORT(p, num_i_n[i], Z);
-
+			cell *p = cell_array+pair[4*i  ];
+			cell *q = cell_array+pair[4*i+1];
+			v.x = ORT(q, pair[4*i+3], X) - ORT(p, pair[4*i+2], X);
+			v.y = ORT(q, pair[4*i+3], Y) - ORT(p, pair[4*i+2], Y);
+			v.z = ORT(q, pair[4*i+3], Z) - ORT(p, pair[4*i+2], Z);
 			real r = SPROD(v,v);
 			r2[i] = MIN(potEndPlus, r);
 		}
@@ -483,26 +456,29 @@ void calc_forces(int steps){
 			vektor v, force;
 
 			if (r2[i] <= potEnd){
-				cell *p = cell_array+cell_i_n[i];
-				cell *q = cell_array+cell_j_n[i];
-				v.x = ORT(q, num_j_n[i], X) - ORT(p, num_i_n[i], X);
-				v.y = ORT(q, num_j_n[i], Y) - ORT(p, num_i_n[i], Y);
-				v.z = ORT(q, num_j_n[i], Z) - ORT(p, num_i_n[i], Z);
+				cell *p = cell_array+pair[4*i  ];
+				cell *q = cell_array+pair[4*i+1];
+				int n_i = pair[4*i+2];
+				int n_j = pair[4*i+3];
+
+				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
+				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
+				v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
 
 				force.x = v.x * grad[i];
 				force.y = v.y * grad[i];
 				force.z = v.z * grad[i];
 
-				KRAFT(q, num_j_n[i],X) -= force.x;
-				KRAFT(q, num_j_n[i],Y) -= force.y;
-				KRAFT(q, num_j_n[i],Z) -= force.z;
+				KRAFT(q, n_j,X) -= force.x;
+				KRAFT(q, n_j,Y) -= force.y;
+				KRAFT(q, n_j,Z) -= force.z;
 
-				KRAFT(p, num_i_n[i],X) += force.x;
-				KRAFT(p, num_i_n[i],Y) += force.y;
-				KRAFT(p, num_i_n[i],Z) += force.z;
+				KRAFT(p, n_i,X) += force.x;
+				KRAFT(p, n_i,Y) += force.y;
+				KRAFT(p, n_i,Z) += force.z;
 
-				POTENG(p, num_i_n[i]) += epot[i] * 0.5;
-				POTENG(q, num_j_n[i]) += epot[i] * 0.5;
+				POTENG(p, n_i) += epot[i] * 0.5;
+				POTENG(q, n_j) += epot[i] * 0.5;
 
 #ifdef P_AXIAL
 				vir_xx -= v.x * force.x;
@@ -519,18 +495,18 @@ void calc_forces(int steps){
 					force.y *= 0.5;
 					force.z *= 0.5;
 
-					PRESSTENS(p, num_i_n[i],xx) -= v.x * force.x;
-					PRESSTENS(q, num_j_n[i],xx) -= v.x * force.x;
-					PRESSTENS(p, num_i_n[i],yy) -= v.y * force.y;
-					PRESSTENS(q, num_j_n[i],yy) -= v.y * force.y;
-					PRESSTENS(p, num_i_n[i],xy) -= v.x * force.y;
-					PRESSTENS(q, num_j_n[i],xy) -= v.x * force.y;
-					PRESSTENS(p, num_i_n[i],zz) -= v.z * force.z;
-					PRESSTENS(q, num_j_n[i],zz) -= v.z * force.z;
-					PRESSTENS(p, num_i_n[i],yz) -= v.y * force.z;
-					PRESSTENS(q, num_j_n[i],yz) -= v.y * force.z;
-					PRESSTENS(p, num_i_n[i],zx) -= v.z * force.x;
-					PRESSTENS(q, num_j_n[i],zx) -= v.z * force.x;
+					PRESSTENS(p, n_i,xx) -= v.x * force.x;
+					PRESSTENS(q, n_j,xx) -= v.x * force.x;
+					PRESSTENS(p, n_i,yy) -= v.y * force.y;
+					PRESSTENS(q, n_j,yy) -= v.y * force.y;
+					PRESSTENS(p, n_i,xy) -= v.x * force.y;
+					PRESSTENS(q, n_j,xy) -= v.x * force.y;
+					PRESSTENS(p, n_i,zz) -= v.z * force.z;
+					PRESSTENS(q, n_j,zz) -= v.z * force.z;
+					PRESSTENS(p, n_i,yz) -= v.y * force.z;
+					PRESSTENS(q, n_j,yz) -= v.y * force.z;
+					PRESSTENS(p, n_i,zx) -= v.z * force.x;
+					PRESSTENS(q, n_j,zx) -= v.z * force.x;
 				}
 #endif
 			}
@@ -565,15 +541,15 @@ void calc_forces(int steps){
 		if(n%ntypes == n/ntypes){
 			for (i=0; i<m; i++){
 				if (r2[i] <= rho_h_tab.end[n]){
-					EAM_RHO(cell_array+cell_i_n[i], num_i_n[i]) += epot[i];
-					EAM_RHO(cell_array+cell_j_n[i], num_j_n[i]) += epot[i];
+					EAM_RHO(cell_array+pair[4*i+0], pair[4*i+2]) += epot[i];
+					EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += epot[i];
 				}
 			}
 		} else {
 			for (i=0; i<m; i++){
 				if (r2[i] <= rho_h_tab.end[n]){
-					EAM_RHO(cell_array+cell_i_n[i], num_i_n[i]) += epot[i];
-					EAM_RHO(cell_array+cell_j_n[i], num_j_n[i]) += grad[i];
+					EAM_RHO(cell_array+pair[4*i+0], pair[4*i+2]) += epot[i];
+					EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += grad[i];
 				}
 			}
 		}
@@ -605,10 +581,7 @@ void calc_forces(int steps){
 	//TODO Nicht symmetrische Tabellen
 
 	for (n = 0; n < nPairs; n++) {
-		const int* restrict cell_i_n = cell_i[n];
-		const int* restrict cell_j_n = cell_j[n];
-		const int* restrict num_i_n = num_i[n];
-		const int* restrict num_j_n = num_j[n];
+		const int* restrict pair = cell_num[n];
 
 		const int m = pairsListLengths[n];
 
@@ -622,11 +595,11 @@ void calc_forces(int steps){
 #endif
 		for (i = 0; i < m; i++) {
 			vektor v;
-			cell *p = cell_array + cell_i_n[i];
-			cell *q = cell_array + cell_j_n[i];
-			v.x = ORT(q, num_j_n[i], X) - ORT(p, num_i_n[i], X);
-			v.y = ORT(q, num_j_n[i], Y) - ORT(p, num_i_n[i], Y);
-			v.z = ORT(q, num_j_n[i], Z) - ORT(p, num_i_n[i], Z);
+			cell *p = cell_array+pair[4*i  ];
+			cell *q = cell_array+pair[4*i+1];
+			v.x = ORT(q, pair[4*i+3], X) - ORT(p, pair[4*i+2], X);
+			v.y = ORT(q, pair[4*i+3], Y) - ORT(p, pair[4*i+2], Y);
+			v.z = ORT(q, pair[4*i+3], Z) - ORT(p, pair[4*i+2], Z);
 
 			real r = SPROD(v, v);
 			r2[i] = MIN(potEndPlus, r);
@@ -659,25 +632,25 @@ void calc_forces(int steps){
 			vektor v, force;
 
 			if (r2[i] <= rho_h_tab.end[n]) {
-				cell *p = cell_array + cell_i_n[i];
-				cell *q = cell_array + cell_j_n[i];
-				v.x = ORT(q, num_j_n[i], X) - ORT(p, num_i_n[i], X);
-				v.y = ORT(q, num_j_n[i], Y) - ORT(p, num_i_n[i], Y);
-				v.z = ORT(q, num_j_n[i], Z) - ORT(p, num_i_n[i], Z);
+				cell *p = cell_array+pair[4*i  ];
+				cell *q = cell_array+pair[4*i+1];
+				v.x = ORT(q, pair[4*i+3], X) - ORT(p, pair[4*i+2], X);
+				v.y = ORT(q, pair[4*i+3], Y) - ORT(p, pair[4*i+2], Y);
+				v.z = ORT(q, pair[4*i+3], Z) - ORT(p, pair[4*i+2], Z);
 
-				real grad_df = 0.5 * (EAM_DF(p,num_i_n[i]) * epot[i] + EAM_DF(q,num_j_n[i]) * grad[i]);
+				real grad_df = 0.5 * (EAM_DF(p,pair[4*i+2]) * epot[i] + EAM_DF(q,pair[4*i+3]) * grad[i]);
 
 				force.x = v.x * grad_df;
 				force.y = v.y * grad_df;
 				force.z = v.z * grad_df;
 
-				KRAFT(q, num_j_n[i],X) -= force.x;
-				KRAFT(q, num_j_n[i],Y) -= force.y;
-				KRAFT(q, num_j_n[i],Z) -= force.z;
+				KRAFT(q, pair[4*i+3],X) -= force.x;
+				KRAFT(q, pair[4*i+3],Y) -= force.y;
+				KRAFT(q, pair[4*i+3],Z) -= force.z;
 
-				KRAFT(p, num_i_n[i],X) += force.x;
-				KRAFT(p, num_i_n[i],Y) += force.y;
-				KRAFT(p, num_i_n[i],Z) += force.z;
+				KRAFT(p, pair[4*i+2],X) += force.x;
+				KRAFT(p, pair[4*i+2],Y) += force.y;
+				KRAFT(p, pair[4*i+2],Z) += force.z;
 
 #ifdef P_AXIAL
 				vir_xx -= v.x * force.x;
@@ -694,18 +667,18 @@ void calc_forces(int steps){
 					force.y *= 0.5;
 					force.z *= 0.5;
 
-					PRESSTENS(p, num_i_n[i],xx) -= v.x * force.x;
-					PRESSTENS(q, num_j_n[i],xx) -= v.x * force.x;
-					PRESSTENS(p, num_i_n[i],yy) -= v.y * force.y;
-					PRESSTENS(q, num_j_n[i],yy) -= v.y * force.y;
-					PRESSTENS(p, num_i_n[i],xy) -= v.x * force.y;
-					PRESSTENS(q, num_j_n[i],xy) -= v.x * force.y;
-					PRESSTENS(p, num_i_n[i],zz) -= v.z * force.z;
-					PRESSTENS(q, num_j_n[i],zz) -= v.z * force.z;
-					PRESSTENS(p, num_i_n[i],yz) -= v.y * force.z;
-					PRESSTENS(q, num_j_n[i],yz) -= v.y * force.z;
-					PRESSTENS(p, num_i_n[i],zx) -= v.z * force.x;
-					PRESSTENS(q, num_j_n[i],zx) -= v.z * force.x;
+					PRESSTENS(p, pair[4*i+2],xx) -= v.x * force.x;
+					PRESSTENS(q, pair[4*i+3],xx) -= v.x * force.x;
+					PRESSTENS(p, pair[4*i+2],yy) -= v.y * force.y;
+					PRESSTENS(q, pair[4*i+3],yy) -= v.y * force.y;
+					PRESSTENS(p, pair[4*i+2],xy) -= v.x * force.y;
+					PRESSTENS(q, pair[4*i+3],xy) -= v.x * force.y;
+					PRESSTENS(p, pair[4*i+2],zz) -= v.z * force.z;
+					PRESSTENS(q, pair[4*i+3],zz) -= v.z * force.z;
+					PRESSTENS(p, pair[4*i+2],yz) -= v.y * force.z;
+					PRESSTENS(q, pair[4*i+3],yz) -= v.y * force.z;
+					PRESSTENS(p, pair[4*i+2],zx) -= v.z * force.x;
+					PRESSTENS(q, pair[4*i+3],zx) -= v.z * force.x;
 				}
 #endif
 			}

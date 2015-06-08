@@ -277,6 +277,28 @@ ifeq (x86_64-icc,${IMDSYS})
   export        OMPI_MPICC MPICH_CC MPICH_CLINKER
 endif
 
+# intel core 2 duo, icc
+ifeq (vulcan2-icc,${IMDSYS})
+  CC_SERIAL	= icc
+  CC_OMP	= icc
+  CC_MPI	= mpicc
+  CC_OMPI	= mpicc
+  MPICH_CC      = icc
+  MPICH_CLINKER = icc
+  OMPI_MPICC    = icc
+  BIN_DIR	= ${HOME}/bin/${HOSTTYPE}
+  OPT_FLAGS	+= -O3 -std=c99 -ip -xAVX -DINTEL_SIMD -fp-model fast=2 -ansi-alias -Wstrict-aliasing -ipo
+  MPI_FLAGS     += 
+  OMP_FLAGS	+= -openmp
+  OMPI_FLAGS	+= -openmp
+  DEBUG_FLAGS	+= -g3 -O0
+  PROF_FLAGS	+= -prof_gen
+  RCD_FLAGS	+= # -DRCD -rcd
+  MPI_LIBS      += 
+  LFLAGS        +=  -ipo #-static # -i-static
+  export        OMPI_MPICC MPICH_CC MPICH_CLINKER
+endif
+
 # generic x86, gcc3 or gcc4
 ifeq (x86-gcc3,${IMDSYS})
   CC_SERIAL	= gcc
@@ -474,6 +496,26 @@ ifeq (ia32-gcc2,${IMDSYS})
   DEBUG_FLAGS	+= -g
   PROF_FLAGS	+= -g3 -pg
   export        MPICH_CC # MPICH_CLINKER
+endif
+
+# native optimization gcc
+ifeq (native-gcc,${IMDSYS})
+  CC_SERIAL	= gcc
+  CC_MPI	= mpicc
+  CC_OMP	= gcc
+  CC_OMPI	= mpicc
+  MPICH_CC      = gcc
+  OMPI_MPICC    = gcc
+  MPICH_CLINKER = gcc
+  BIN_DIR	= 	${HOME}/bin/${HOSTTYPE}
+  OPT_FLAGS	+= -O3 -march=native -std=c99
+  OMP_FLAGS	+= -fopenmp
+  DEBUG_FLAGS	+= -g3 -O0
+  PROF_FLAGS	+= -g3 -pg
+  PAPI_INC      =  -I /opt/include
+  PAPI_LIBS     =  -L /opt/lib -lpapi -lperfctr
+  LFLAGS        += #-static
+  export        OMPI_MPICC MPICH_CC MPICH_CLINKER
 endif
 
 ifeq (x86_64-llvm,${IMDSYS})
@@ -1138,9 +1180,9 @@ SOURCES += ${SRCMAIN}
 ifneq (,$(strip $(findstring vec,${MAKETARGET})))
   FORCESOURCES = imd_main_vec_3d.c
 else
-  ifneq (,$(strip $(findstring cbe,${MAKETARGET})))
-    FORCESOURCES = imd_forces_cbe.c
-    PP_FLAGS += -DCBE
+  ifneq (,$(strip $(findstring avx,${MAKETARGET})))
+    FORCESOURCES = imd_forces_nbl_avx.c
+    PP_FLAGS += -DNBL
   else
     ifneq (,$(strip $(findstring nbl,${MAKETARGET})))
       FORCESOURCES = imd_forces_nbl.c

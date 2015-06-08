@@ -634,23 +634,25 @@ void calc_forces(int steps){
 			if (r2[i] <= rho_h_tab.end[n]) {
 				cell *p = cell_array+pair[4*i  ];
 				cell *q = cell_array+pair[4*i+1];
-				v.x = ORT(q, pair[4*i+3], X) - ORT(p, pair[4*i+2], X);
-				v.y = ORT(q, pair[4*i+3], Y) - ORT(p, pair[4*i+2], Y);
-				v.z = ORT(q, pair[4*i+3], Z) - ORT(p, pair[4*i+2], Z);
+				int n_i = pair[4*i+2];
+				int n_j = pair[4*i+3];
+				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
+				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
+				v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
 
-				real grad_df = 0.5 * (EAM_DF(p,pair[4*i+2]) * epot[i] + EAM_DF(q,pair[4*i+3]) * grad[i]);
+				real grad_df = 0.5 * (EAM_DF(p,n_i) * epot[i] + EAM_DF(q,n_j) * grad[i]);
 
 				force.x = v.x * grad_df;
 				force.y = v.y * grad_df;
 				force.z = v.z * grad_df;
 
-				KRAFT(q, pair[4*i+3],X) -= force.x;
-				KRAFT(q, pair[4*i+3],Y) -= force.y;
-				KRAFT(q, pair[4*i+3],Z) -= force.z;
+				KRAFT(q, n_j,X) -= force.x;
+				KRAFT(q, n_j,Y) -= force.y;
+				KRAFT(q, n_j,Z) -= force.z;
 
-				KRAFT(p, pair[4*i+2],X) += force.x;
-				KRAFT(p, pair[4*i+2],Y) += force.y;
-				KRAFT(p, pair[4*i+2],Z) += force.z;
+				KRAFT(p, n_i,X) += force.x;
+				KRAFT(p, n_i,Y) += force.y;
+				KRAFT(p, n_i,Z) += force.z;
 
 #ifdef P_AXIAL
 				vir_xx -= v.x * force.x;
@@ -667,18 +669,18 @@ void calc_forces(int steps){
 					force.y *= 0.5;
 					force.z *= 0.5;
 
-					PRESSTENS(p, pair[4*i+2],xx) -= v.x * force.x;
-					PRESSTENS(q, pair[4*i+3],xx) -= v.x * force.x;
-					PRESSTENS(p, pair[4*i+2],yy) -= v.y * force.y;
-					PRESSTENS(q, pair[4*i+3],yy) -= v.y * force.y;
-					PRESSTENS(p, pair[4*i+2],xy) -= v.x * force.y;
-					PRESSTENS(q, pair[4*i+3],xy) -= v.x * force.y;
-					PRESSTENS(p, pair[4*i+2],zz) -= v.z * force.z;
-					PRESSTENS(q, pair[4*i+3],zz) -= v.z * force.z;
-					PRESSTENS(p, pair[4*i+2],yz) -= v.y * force.z;
-					PRESSTENS(q, pair[4*i+3],yz) -= v.y * force.z;
-					PRESSTENS(p, pair[4*i+2],zx) -= v.z * force.x;
-					PRESSTENS(q, pair[4*i+3],zx) -= v.z * force.x;
+					PRESSTENS(p, n_i,xx) -= v.x * force.x;
+					PRESSTENS(p, n_i,yy) -= v.y * force.y;
+					PRESSTENS(p, n_i,xy) -= v.x * force.y;
+					PRESSTENS(p, n_i,zz) -= v.z * force.z;
+					PRESSTENS(p, n_i,yz) -= v.y * force.z;
+					PRESSTENS(p, n_i,zx) -= v.z * force.x;
+					PRESSTENS(q, n_j,zx) -= v.z * force.x;
+					PRESSTENS(q, n_j,xx) -= v.x * force.x;
+					PRESSTENS(q, n_j,yy) -= v.y * force.y;
+					PRESSTENS(q, n_j,zz) -= v.z * force.z;
+					PRESSTENS(q, n_j,xy) -= v.x * force.y;
+					PRESSTENS(q, n_j,yz) -= v.y * force.z;
 				}
 #endif
 			}

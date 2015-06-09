@@ -95,19 +95,17 @@
 
 #define NBLMINLEN 10000
 
-void estimate_nblist_size_pairs(int*);
-
 int** restrict cell_num = NULL;
 int* restrict pairsListLengths = NULL;
 int* restrict pairsListMaxLengths = NULL;
-double* restrict cutoffRadii = NULL;
+real* restrict cutoffRadii = NULL;
 int initialized = 0;
 
 real* restrict epot = NULL;
 real* restrict grad = NULL;
 #ifdef EAM2
-real* restrict aux1 = NULL;
-real* restrict aux2 = NULL;
+real* restrict rho_grad1 = NULL;
+real* restrict rho_grad2 = NULL;
 #endif
 real* restrict r2 = NULL;
 int r2ListSize = 0;
@@ -120,7 +118,7 @@ void init(void){
 	pairsListMaxLengths = malloc(n* sizeof *pairsListMaxLengths);
 	for (i=0; i<n; i++){
 		pairsListLengths[i] = 0;
-		pairsListMaxLengths[i] = 0;
+		pairsListMaxLengths[i] = NBLMINLEN;
 	}
 
 	//Compute/read the individual cut-off radii for the different pairs
@@ -139,7 +137,7 @@ void init(void){
 	cell_num = malloc(n * sizeof *cell_num);
 
 	for (i=0; i<n; i++)
-		cell_num[i] = NULL;
+		cell_num[i] = malloc(pairsListMaxLengths[i] * 4 * sizeof *cell_num[i]);
 
 	initialized = 1;
 }
@@ -165,8 +163,8 @@ void deallocate_nblist(void){
 		free(grad);
 		free(r2);
 #ifdef EAM2
-		free(aux1);
-		free(aux2);
+		free(rho_grad1);
+		free(rho_grad2);
 #endif
 		r2ListSize = 0;
 	}
@@ -174,66 +172,6 @@ void deallocate_nblist(void){
 
 	have_valid_nbl = 0;
 	initialized = 0;
-}
-
-/******************************************************************************
- *
- *  estimate_nblist_size
- *
- ******************************************************************************/
-
-void estimate_nblist_size_pairs(int *pairs){
-	int c, n;
-
-	for (c=0; c<ntypes*ntypes; c++)
-		pairs[c] = 0;
-
-	/* for all cells */
-	for (c = 0; c < ncells2; c++) {
-
-		int i, c1 = cnbrs[c].np;
-		cell *p = cell_array + c1;
-
-		/* for each atom in cell */
-		for (i = 0; i < p->n; i++) {
-
-			int m;
-			vektor d1;
-
-			d1.x = ORT(p, i, X);
-			d1.y = ORT(p, i, Y);
-			d1.z = ORT(p, i, Z);
-			int is = SORTE(p,i);
-
-			/* for each neighboring atom */
-			for (m = 0; m < NNBCELL; m++) {
-
-				int c2, jstart, j;
-				real r2;
-				cell *q;
-
-				c2 = cnbrs[c].nq[m];
-				if (c2 < 0) continue;
-				if (c2 == c1) jstart = i + 1;
-				else jstart = 0;
-
-				q = cell_array + c2;
-				const int k = q->n;
-				for (j = jstart; j < k; j++) {
-					vektor d;
-					d.x = ORT(q,j,X) - d1.x;
-					d.y = ORT(q,j,Y) - d1.y;
-					d.z = ORT(q,j,Z) - d1.z;
-
-					int js = SORTE(q,j);
-
-					r2 = SPROD(d, d);
-					n = is*ntypes + js;
-					if (r2 <= cutoffRadii[n]) pairs[n]++;
-				}
-			}
-		}
-	}
 }
 
 /******************************************************************************
@@ -261,26 +199,9 @@ void make_nblist(void){
 
 	n = ntypes*ntypes;
 
-
-	estimate_nblist_size_pairs(pairsListLengths);
-
 	//(re-allocate) pair lists
-	for (j = 0; j<n; j++){
-		int size = MAX( (int)(nbl_size * pairsListLengths[j]), NBLMINLEN);
-		if( size > pairsListMaxLengths[j]){
-			pairsListMaxLengths[j] = size;
-			if (cell_num[j]) free(cell_num[j]);
-
-			cell_num[j] = malloc(4 * size * sizeof *cell_num[j]);
-
-			if (cell_num[j]==NULL){
-				error("Cannot allocate neighbor pair list");
-			}
-		}
-		//Set the number of used entries in the list to 0
+	for (j = 0; j<n; j++)
 		pairsListLengths[j] = 0;
-	}
-
 
 	/* for all cells */
 	int c;
@@ -328,6 +249,11 @@ void make_nblist(void){
 						cell_num[n][4*k+1] = c2;
 						cell_num[n][4*k+2] = i;
 						cell_num[n][4*k+3] = j;
+						//Double the size of the table, if running out of space
+						if(pairsListLengths[n] == pairsListMaxLengths[n]){
+							pairsListMaxLengths[n] *= 2;
+							cell_num[n] = realloc(cell_num[n], pairsListMaxLengths[n]*4*sizeof *cell_num[n]);
+						}
 					}
 				}
 			}
@@ -429,10 +355,10 @@ void calc_forces(int steps){
 		r2   = malloc(r2ListSize * sizeof *r2);
 
 #ifdef EAM2
-		if(aux1) free(aux1);
-		if(aux2) free(aux2);
-		aux1 = malloc(r2ListSize * sizeof *aux1);
-		aux2 = malloc(r2ListSize * sizeof *aux2);
+		if(rho_grad1) free(rho_grad1);
+		if(rho_grad2) free(rho_grad2);
+		rho_grad1 = malloc(r2ListSize * sizeof *rho_grad1);
+		rho_grad2 = malloc(r2ListSize * sizeof *rho_grad2);
 #endif
 	}
 
@@ -554,7 +480,7 @@ void calc_forces(int steps){
 				//vectorization compared to an if-clause
 				real r = MIN(r2[i], rhoEndCol1);
 				r = MAX( 0.0, r-rhoBeginCol1);
-				PAIR_INT_VEC(epot[i], aux1[i], rho_h_tab, n, 1, r);
+				PAIR_INT_VEC(epot[i], rho_grad1[i], rho_h_tab, n, 1, r);
 			}
 		} else {
 #ifdef INTEL_SIMD
@@ -563,16 +489,17 @@ void calc_forces(int steps){
 			for (i=startIndex; i<startIndex+m; i++){
 				real r = MIN(r2[i], rhoEndCol1);
 				r = MAX( 0.0, r-rhoBeginCol1);
-				PAIR_INT_VEC(epot[i], aux1[i], rho_h_tab, col1, 1, r);
+				PAIR_INT_VEC(epot[i], rho_grad1[i], rho_h_tab, col1, 1, r);
 				real s = MIN(r2[i], rhoEndCol2);
 				s = MAX( 0.0, s-rhoBeginCol2);
-				PAIR_INT_VEC(grad[i], aux2[i], rho_h_tab, col2, 1, s);
+				PAIR_INT_VEC(grad[i], rho_grad2[i], rho_h_tab, col2, 1, s);
 			}
 		}
 
 
 		if(type1 == type2){
-			for (i=n*m; i<(n+1)*m; i++){
+			for (i=startIndex; i<startIndex+m; i++){
+				int l = i-startIndex;
 				if (r2[i] < rhoEndCol1){
 					int l = i-startIndex;
 					EAM_RHO(cell_array+pair[4*l+0], pair[4*l+2]) += epot[i];
@@ -645,9 +572,9 @@ void calc_forces(int steps){
 
 				real grad_df;
 				if (type1==type2)
-					grad_df = 0.5 * (EAM_DF(p,n_i)+ EAM_DF(q,n_j)) * aux1[i];
+					grad_df = 0.5 * (EAM_DF(p,n_i)+ EAM_DF(q,n_j)) * rho_grad1[i];
 				else
-					grad_df = 0.5 * (EAM_DF(p,n_i) * aux1[i] + EAM_DF(q,n_j) * aux2[i]);
+					grad_df = 0.5 * (EAM_DF(p,n_i) * rho_grad1[i] + EAM_DF(q,n_j) * rho_grad2[i]);
 
 				force.x = v.x * grad_df;
 				force.y = v.y * grad_df;

@@ -444,12 +444,18 @@ void calc_forces(int steps){
 
 		const real potBegin = pair_pot.begin[n];
 		const real potEnd = pair_pot.end[n];
-		const real potEndPlus = pair_pot.end[n]+0.1;
 
 		const int type1 = n / ntypes;
 		const int type2 = n % ntypes;
 		const int col1 = n;
 		const int col2 = type2 * ntypes + type1;
+
+#ifdef EAM2
+		const real rhoBeginCol1 = rho_h_tab.begin[col1];
+		const real rhoEndCol1 = rho_h_tab.end[col1];
+		const real rhoBeginCol2 = rho_h_tab.begin[col2];
+		const real rhoEndCol2 = rho_h_tab.end[col2];
+#endif
 
 		//Precompute distances
 #ifdef INTEL_SIMD
@@ -464,7 +470,7 @@ void calc_forces(int steps){
 			v.y = ORT(q, pair[4*l+3], Y) - ORT(p, pair[4*l+2], Y);
 			v.z = ORT(q, pair[4*l+3], Z) - ORT(p, pair[4*l+2], Z);
 			real r = SPROD(v,v);
-			r2[i] = MIN(potEndPlus, r);
+			r2[i] = MIN(potEnd, r);
 		}
 #ifdef INTEL_SIMD
 #pragma ivdep
@@ -477,7 +483,7 @@ void calc_forces(int steps){
 		for (i=startIndex; i<startIndex+m; i++){
 			vektor v, force;
 
-			if (r2[i] <= potEnd){
+			if (r2[i] < potEnd){
 				int l = i-startIndex;
 				cell *p = cell_array+pair[4*l  ];
 				cell *q = cell_array+pair[4*l+1];
@@ -535,7 +541,6 @@ void calc_forces(int steps){
 			}
 		}
 
-		//TODO Tabelle rho kuerzer als pair?
 
 #ifdef EAM2
 		if(type1 == type2){
@@ -543,7 +548,12 @@ void calc_forces(int steps){
 #pragma ivdep
 #endif
 			for (i=startIndex; i<startIndex+m; i++){
-				real r = MAX( 0.0, r2[i] - rho_h_tab.begin[col1]);
+				//Limit the distance r to the cutoff distance
+				//The last value will be zero, so it does not change the result
+				//However, computing the value in any case does not prohibit
+				//vectorization compared to an if-clause
+				real r = MIN(r2[i], rhoEndCol1);
+				r = MAX( 0.0, r-rhoBeginCol1);
 				PAIR_INT_VEC(epot[i], aux1[i], rho_h_tab, n, 1, r);
 			}
 		} else {
@@ -551,17 +561,19 @@ void calc_forces(int steps){
 #pragma ivdep
 #endif
 			for (i=startIndex; i<startIndex+m; i++){
-				real r = MAX( 0.0, r2[i] - rho_h_tab.begin[col1]);
+				real r = MIN(r2[i], rhoEndCol1);
+				r = MAX( 0.0, r-rhoBeginCol1);
 				PAIR_INT_VEC(epot[i], aux1[i], rho_h_tab, col1, 1, r);
-				r = MAX( 0.0, r2[i] - rho_h_tab.begin[col2]);
-				PAIR_INT_VEC(grad[i], aux2[i], rho_h_tab, col2, 1, r);
+				real s = MIN(r2[i], rhoEndCol2);
+				s = MAX( 0.0, s-rhoBeginCol2);
+				PAIR_INT_VEC(grad[i], aux2[i], rho_h_tab, col2, 1, s);
 			}
 		}
 
 
 		if(type1 == type2){
 			for (i=n*m; i<(n+1)*m; i++){
-				if (r2[i] <= rho_h_tab.end[col1]){
+				if (r2[i] < rhoEndCol1){
 					int l = i-startIndex;
 					EAM_RHO(cell_array+pair[4*l+0], pair[4*l+2]) += epot[i];
 					EAM_RHO(cell_array+pair[4*l+1], pair[4*l+3]) += epot[i];
@@ -570,9 +582,9 @@ void calc_forces(int steps){
 		} else {
 			for (i=startIndex; i<startIndex+m; i++){
 				int l = i-startIndex;
-				if (r2[i] <= rho_h_tab.end[col1])
+				if (r2[i] < rhoEndCol1)
 					EAM_RHO(cell_array+pair[4*l+0], pair[4*l+2]) += epot[i];
-				if (r2[i] <= rho_h_tab.end[col2])
+				if (r2[i] < rhoEndCol2)
 					EAM_RHO(cell_array+pair[4*l+1], pair[4*l+3]) += grad[i];
 			}
 		}

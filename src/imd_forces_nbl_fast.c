@@ -101,17 +101,13 @@ int* restrict pairsListMaxLengths = NULL;
 real* restrict cutoffRadii = NULL;
 int initialized = 0;
 
-real* restrict epot = NULL;
 real* restrict grad = NULL;
 #ifdef EAM2
 real* restrict rho_grad1 = NULL;
 real* restrict rho_grad2 = NULL;
-real* restrict rho1 = NULL;
-real* restrict rho2 = NULL;
 #endif
 real* restrict r2 = NULL;
 int r2ListSize = 0;
-int epotListSize = 0;
 
 void init(void){
 	int i,j,m;
@@ -162,14 +158,11 @@ void deallocate_nblist(void){
 	free(cutoffRadii);
 
 	if(r2ListSize != 0){
-		free(epot);
 		free(grad);
 		free(r2);
 #ifdef EAM2
 		free(rho_grad1);
 		free(rho_grad2);
-		free(rho1);
-		free(rho2);
 #endif
 		r2ListSize = 0;
 	}
@@ -353,20 +346,15 @@ void calc_forces(int steps){
 
 
 	int sumList = 0;
-	int longestList = 0;
 	for (i = 0; i<nPairs; i++){
 		sumList += pairsListLengths[i];
-		longestList = MAX(longestList, pairsListLengths[i]);
 	}
 
 	if(sumList>r2ListSize){
 		r2ListSize = (int)(nbl_size*sumList);
 		if(r2) free(r2);
 		if(grad) free(grad);
-		if(epot) free(epot);
-		
 		r2   = malloc(r2ListSize * sizeof *r2);
-		epot = malloc(r2ListSize * sizeof *epot);
 		grad = malloc(r2ListSize * sizeof *grad);
 
 #ifdef EAM2
@@ -374,16 +362,6 @@ void calc_forces(int steps){
 		if(rho_grad2) free(rho_grad2);
 		rho_grad1 = malloc(r2ListSize * sizeof *rho_grad1);
 		rho_grad2 = malloc(r2ListSize * sizeof *rho_grad2);
-#endif
-	}
-
-	if(longestList>epotListSize){
-		epotListSize = (int)(nbl_size*longestList);
-#ifdef EAM2
-		if(rho1) free(rho1);
-		if(rho2) free(rho2);
-		rho1 = malloc(epotListSize * sizeof *rho1);
-		rho2 = malloc(epotListSize * sizeof *rho2);
 #endif
 	}
 
@@ -409,76 +387,62 @@ void calc_forces(int steps){
 #endif
 
 		//Precompute squared distances and the pair-potential part
-#ifdef INTEL_SIMD
-#pragma ivdep
-#endif
-#ifdef OMP
-#pragma omp parallel for
-#endif
 		for (i=0; i<m; i++){
 			vektor v;
 			cell *p = cell_array+pair[4*i  ];
 			cell *q = cell_array+pair[4*i+1];
+			int n_i = pair[4*i+2];
+			int n_j = pair[4*i+3];
 			//Compute squared distance
-			v.x = ORT(q, pair[4*i+3], X) - ORT(p, pair[4*i+2], X);
-			v.y = ORT(q, pair[4*i+3], Y) - ORT(p, pair[4*i+2], Y);
-			v.z = ORT(q, pair[4*i+3], Z) - ORT(p, pair[4*i+2], Z);
-			r2[i+cellpairOffset] = SPROD(v,v);
+			v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
+			v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
+			v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
+			real rd = SPROD(v,v);
+			r2[i+cellpairOffset] = rd;
 
-			//Clamp distance into the valid range of the potential table
-			real r = MIN(potEnd, r2[i+cellpairOffset]);
-			r = MAX( 0.0, r - potBegin);
-			//Compute pair potential and store epot and its gradient
-			PAIR_INT_VEC(epot[i+cellpairOffset], grad[i+cellpairOffset], pair_pot, col1, 1, r);
-		}
-
+			if (rd < pair_pot.end[n]){
+				//Clamp distance into the valid range of the potential table
+				real r = MAX( 0.0, rd - potBegin);
+				//Compute pair potential and store epot and its gradient
+				real epot;
+				PAIR_INT_VEC(epot, grad[i+cellpairOffset], pair_pot, col1, 1, r);
+				POTENG(p, n_i) += epot * 0.5;
+				POTENG(q, n_j) += epot * 0.5;
+			}
 
 #ifdef EAM2
-		//Compute the electron density and the gradients
-		if(type1 == type2){
-#ifdef INTEL_SIMD
-#pragma ivdep
-#endif
-#ifdef OMP
-#pragma omp parallel for
-#endif
-			for (i=0; i<m; i++){
-				//Clamp distance into the valid range of the potential table
-				real r = MIN(r2[i+cellpairOffset], rhoEndCol1);
-				r = MAX( 0.0, r - rhoBeginCol1);
-				//Compute electron density rho and the gradient
-				PAIR_INT_VEC(rho1[i], rho_grad1[i+cellpairOffset], rho_h_tab, n, 1, r);
+			//Compute the electron density and the gradients
+			if(type1 == type2){
+				if (rd < rhoEndCol1){
+					//Clamp distance into the valid range of the potential table
+					real r = MAX( 0.0, rd - rhoBeginCol1);
+					//Compute electron density rho and the gradient
+					real rho;
+					PAIR_INT_VEC(rho, rho_grad1[i+cellpairOffset], rho_h_tab, n, 1, r);
+					EAM_RHO(p, n_i) += rho;
+					EAM_RHO(q, n_j) += rho;
+				}
+			} else {
+
+				if (rd < rhoEndCol1){
+					real r = MAX( 0.0, rd-rhoBeginCol1);
+					real rho;
+					PAIR_INT_VEC(rho, rho_grad1[i+cellpairOffset], rho_h_tab, col1, 1, r);
+					EAM_RHO(p, n_i) += rho;
+				}
+				if (rd < rhoEndCol2){
+					real s = MAX( 0.0, rd-rhoBeginCol2);
+					real rho;
+					PAIR_INT_VEC(rho, rho_grad2[i+cellpairOffset], rho_h_tab, col2, 1, s);
+					EAM_RHO(q, n_j) += rho;
+				}
+
 			}
-		} else {
-#ifdef INTEL_SIMD
-#pragma ivdep
 #endif
-#ifdef OMP
-#pragma omp parallel for
-#endif
-			for (i=0; i<m; i++){
-				real r = MIN(r2[i+cellpairOffset], rhoEndCol1);
-				r = MAX( 0.0, r-rhoBeginCol1);
-				PAIR_INT_VEC(rho1[i], rho_grad1[i+cellpairOffset], rho_h_tab, col1, 1, r);
-				real s = MIN(r2[i+cellpairOffset], rhoEndCol2);
-				s = MAX( 0.0, s-rhoBeginCol2);
-				PAIR_INT_VEC(rho2[i], rho_grad2[i+cellpairOffset], rho_h_tab, col2, 1, s);
-			}
+
 		}
 
-		//Summing up rho
-		for (i=0; i<m; i++){
-			if (r2[i+cellpairOffset] < rhoEndCol1)
-				EAM_RHO(cell_array+pair[4*i  ], pair[4*i+2]) += rho1[i];
-			if (r2[i+cellpairOffset] < rhoEndCol2){
-				if(type1==type2)
-					EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += rho1[i];
-				else EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += rho2[i];
-			}
-		}
-#endif
 		cellpairOffset+=m;	//Increase the offset in the
-
 	} // pairs n
 
 #ifdef EAM2
@@ -532,68 +496,68 @@ void calc_forces(int steps){
 			cell *q = cell_array+pair[4*i+1];
 			int n_i = pair[4*i+2];
 			int n_j = pair[4*i+3];
-			v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
-			v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
-			v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
 
 			real g = 0.;
 			if (r2[i+cellpairOffset] < pair_pot.end[n]){
 				g = grad[i+cellpairOffset];
-				POTENG(p, n_i) += epot[i+cellpairOffset] * 0.5;
-				POTENG(q, n_j) += epot[i+cellpairOffset] * 0.5;
 			}
 
 #ifdef EAM2
 			if (r2[i+cellpairOffset] <= rhoCut) {
-				real grad_df;
 				if (type1==type2)
-					g += 0.5 * (EAM_DF(p,n_i)+ EAM_DF(q,n_j)) * rho_grad1[i+cellpairOffset];
+					g += 0.5 * (EAM_DF(p,n_i) + EAM_DF(q,n_j)) * rho_grad1[i+cellpairOffset];
 				else
 					g += 0.5 * (EAM_DF(p,n_i) * rho_grad1[i+cellpairOffset] + EAM_DF(q,n_j) * rho_grad2[i+cellpairOffset]);
 			}
 #endif
 
-			force.x = v.x * g;
-			force.y = v.y * g;
-			force.z = v.z * g;
+			if(g!=0){
+				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
+				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
+				v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
 
-			KRAFT(q, n_j,X) -= force.x;
-			KRAFT(q, n_j,Y) -= force.y;
-			KRAFT(q, n_j,Z) -= force.z;
+				force.x = v.x * g;
+				force.y = v.y * g;
+				force.z = v.z * g;
 
-			KRAFT(p, n_i,X) += force.x;
-			KRAFT(p, n_i,Y) += force.y;
-			KRAFT(p, n_i,Z) += force.z;
+				KRAFT(q, n_j,X) -= force.x;
+				KRAFT(q, n_j,Y) -= force.y;
+				KRAFT(q, n_j,Z) -= force.z;
+
+				KRAFT(p, n_i,X) += force.x;
+				KRAFT(p, n_i,Y) += force.y;
+				KRAFT(p, n_i,Z) += force.z;
 
 #ifdef P_AXIAL
-			vir_xx -= v.x * force.x;
-			vir_yy -= v.y * force.y;
-			vir_zz -= v.z * force.z;
+				vir_xx -= v.x * force.x;
+				vir_yy -= v.y * force.y;
+				vir_zz -= v.z * force.z;
 #else
-			virial       -= SPROD(v,force);
+				virial       -= SPROD(v,force);
 #endif
 
 #ifdef STRESS_TENS
-			if (do_press_calc) {
-				/* avoid double counting of the virial */
-				force.x *= 0.5;
-				force.y *= 0.5;
-				force.z *= 0.5;
+				if (do_press_calc) {
+					/* avoid double counting of the virial */
+					force.x *= 0.5;
+					force.y *= 0.5;
+					force.z *= 0.5;
 
-				PRESSTENS(p, n_i,xx) -= v.x * force.x;
-				PRESSTENS(p, n_i,yy) -= v.y * force.y;
-				PRESSTENS(p, n_i,xy) -= v.x * force.y;
-				PRESSTENS(p, n_i,zz) -= v.z * force.z;
-				PRESSTENS(p, n_i,yz) -= v.y * force.z;
-				PRESSTENS(p, n_i,zx) -= v.z * force.x;
-				PRESSTENS(q, n_j,zx) -= v.z * force.x;
-				PRESSTENS(q, n_j,xx) -= v.x * force.x;
-				PRESSTENS(q, n_j,yy) -= v.y * force.y;
-				PRESSTENS(q, n_j,zz) -= v.z * force.z;
-				PRESSTENS(q, n_j,xy) -= v.x * force.y;
-				PRESSTENS(q, n_j,yz) -= v.y * force.z;
-			}
+					PRESSTENS(p, n_i,xx) -= v.x * force.x;
+					PRESSTENS(p, n_i,yy) -= v.y * force.y;
+					PRESSTENS(p, n_i,xy) -= v.x * force.y;
+					PRESSTENS(p, n_i,zz) -= v.z * force.z;
+					PRESSTENS(p, n_i,yz) -= v.y * force.z;
+					PRESSTENS(p, n_i,zx) -= v.z * force.x;
+					PRESSTENS(q, n_j,zx) -= v.z * force.x;
+					PRESSTENS(q, n_j,xx) -= v.x * force.x;
+					PRESSTENS(q, n_j,yy) -= v.y * force.y;
+					PRESSTENS(q, n_j,zz) -= v.z * force.z;
+					PRESSTENS(q, n_j,xy) -= v.x * force.y;
+					PRESSTENS(q, n_j,yz) -= v.y * force.z;
+				}
 #endif
+			}
 		}
 		cellpairOffset+=m;
 	}//n pairs

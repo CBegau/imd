@@ -9,24 +9,25 @@
 
 /******************************************************************************
  *
- * imd_forces_nbl.c -- force loop with neighbor lists
- * optimized for parallelization & vectorization
- * This implementation is very memory intensive
+ * imd_forces_nbl_fast.c -- force loop with neighbor lists
+ * optimized for EAM potentials.
+ * During computing the potential energy and the electron density,
+ * the gradient of each (!) pair interaction is cached in an additional array
+ * Later, the forces of both parts are summed together.
+ * This has the advantage that electron density and its gradient can be
+ * computed at the same time and the force summation loop needs only to be
+ * executed once.
  *
  ******************************************************************************/
 
-/******************************************************************************
- * $Revision$
- * $Date$
- ******************************************************************************/
 
 #include "imd.h"
 #include "potaccess.h"
 
-#define PAIR_INT_VEC(pot, grd, pt, col, inc, r2)                             \
+#define PAIR_INT_FAST(pot, grd, pt, col, r2)                                 \
 {                                                                            \
-  real r2a, istep, chi, p0, p1, p2, dv, d2v, *ptr;                           \
-  int kk;                                                                   \
+  real r2a, istep, chi, dv, d2v, *t;                                         \
+  int kk;                                                                    \
                                                                              \
   /* indices into potential table */                                         \
   istep = (pt).invstep[col];                                                 \
@@ -35,16 +36,13 @@
   chi   = r2a - kk;                                                          \
                                                                              \
   /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, (col),kk, (inc),(pt).maxsteps);                   \
-  p0  = *ptr; ptr ++;                                                        \
-  p1  = *ptr; ptr ++;                                                        \
-  p2  = *ptr;                                                                \
-  dv  = p1 - p0;                                                             \
-  d2v = p2 - 2. * p1 + p0;                                                    \
+  t = PTR_2D((pt).table, (col),kk, 0,(pt).maxsteps);                         \
+  dv  = t[1] - t[0];                                                         \
+  d2v = t[2] - 2. * t[1] + t[0];                                             \
                                                                              \
   /* potential and twice the derivative */                                   \
-  pot = p0 + chi * dv + 0.5 * chi * (chi - 1.) * d2v;                         \
-  grd = 2. * istep * (dv + (chi - 0.5) * d2v);                                \
+  pot = t[0] + chi * dv + 0.5 * chi * (chi - 1.) * d2v;                      \
+  grd = 2. * istep * (dv + (chi - 0.5) * d2v);                               \
 }
 
 #define NBLMINLEN 10000
@@ -55,6 +53,7 @@ int* restrict pairsListMaxLengths = NULL;
 real* restrict cutoffRadii = NULL;
 int initialized = 0;
 
+//Temporary storages for computed potential gradients
 real* restrict grad = NULL;
 #ifdef EAM2
 real* restrict rho_grad1 = NULL;
@@ -79,9 +78,9 @@ void init(void){
 	for (i=0; i<ntypes;i++){
 		for (j=0; j<ntypes;j++){
 			m = i*ntypes + j;
-			cutoffRadii[m] = pair_pot.end[m];
+			cutoffRadii[m] = pair_pot.end[m]+nbl_margin;
 #ifdef EAM2
-			cutoffRadii[m] = MAX(cutoffRadii[m],rho_h_tab.end[m]);
+			cutoffRadii[m] = MAX(cutoffRadii[m],rho_h_tab.end[m]+nbl_margin);
 #endif
 		}
 	}
@@ -93,12 +92,6 @@ void init(void){
 
 	initialized = 1;
 }
-
-/******************************************************************************
- *
- *  deallocate (largest part of) neighbor list
- *
- ******************************************************************************/
 
 void deallocate_nblist(void){
 	if (!initialized) return;
@@ -124,12 +117,6 @@ void deallocate_nblist(void){
 	initialized = 0;
 }
 
-/******************************************************************************
- *
- *  make_nblist
- *
- ******************************************************************************/
-
 void make_nblist(void){
 	int i,j, k, n;
 
@@ -152,7 +139,6 @@ void make_nblist(void){
 
 	n = ntypes*ntypes;
 
-	//(re-allocate) pair lists
 	for (j = 0; j<n; j++)
 		pairsListLengths[j] = 0;
 
@@ -196,6 +182,7 @@ void make_nblist(void){
 
 					r2 = SPROD(d, d);
 					n = is*ntypes + js;
+					//Test if this pair of atoms is inside the cutoff radius
 					if (r2 <= cutoffRadii[n]) {
 						k = pairsListLengths[n]++;
 						pairLists[n][4*k  ] = c1;
@@ -267,6 +254,9 @@ void calc_forces(int steps){
 	for (k = 0; k < nallcells; k++) {
 		cell *p = cell_array + k;
 		const int n = p->n;
+#ifdef INTEL_SIMD
+#pragma ivdep
+#endif
 		for (i = 0; i < n; i++) {
 			KRAFT(p,i,X) = 0.0;
 			KRAFT(p,i,Y) = 0.0;
@@ -353,7 +343,7 @@ void calc_forces(int steps){
 				real r = MAX( 0.0, rd - potBegin);
 				//Compute pair potential and store epot and its gradient
 				real epot;
-				PAIR_INT_VEC(epot, grad[i+cellpairOffset], pair_pot, col1, 1, r);
+				PAIR_INT_FAST(epot, grad[i+cellpairOffset], pair_pot, col1, r);
 				POTENG(p, n_i) += epot * 0.5;
 				POTENG(q, n_j) += epot * 0.5;
 			}
@@ -361,27 +351,30 @@ void calc_forces(int steps){
 #ifdef EAM2
 			//Compute the electron density and the gradients
 			if(type1 == type2){
+				//Both atoms are of the same type. Electron density and gradient are
+				//identical for both
 				if (rd < rhoEndCol1){
 					//Clamp distance into the valid range of the potential table
 					real r = MAX( 0.0, rd - rhoBeginCol1);
-					//Compute electron density rho and the gradient
+					//Compute electron density rho and the gradient, store the gradient for later
 					real rho;
-					PAIR_INT_VEC(rho, rho_grad1[i+cellpairOffset], rho_h_tab, n, 1, r);
+					PAIR_INT_FAST(rho, rho_grad1[i+cellpairOffset], rho_h_tab, n, r);
 					EAM_RHO(p, n_i) += rho;
 					EAM_RHO(q, n_j) += rho;
 				}
 			} else {
-
+				//Different atomic types in the interaction
+				//Compute individual electron density
 				if (rd < rhoEndCol1){
 					real r = MAX( 0.0, rd-rhoBeginCol1);
 					real rho;
-					PAIR_INT_VEC(rho, rho_grad1[i+cellpairOffset], rho_h_tab, col1, 1, r);
+					PAIR_INT_FAST(rho, rho_grad1[i+cellpairOffset], rho_h_tab, col1, r);
 					EAM_RHO(p, n_i) += rho;
 				}
 				if (rd < rhoEndCol2){
 					real s = MAX( 0.0, rd-rhoBeginCol2);
 					real rho;
-					PAIR_INT_VEC(rho, rho_grad2[i+cellpairOffset], rho_h_tab, col2, 1, s);
+					PAIR_INT_FAST(rho, rho_grad2[i+cellpairOffset], rho_h_tab, col2, s);
 					EAM_RHO(q, n_j) += rho;
 				}
 
@@ -390,7 +383,7 @@ void calc_forces(int steps){
 
 		}
 
-		cellpairOffset+=m;	//Increase the offset in the
+		cellpairOffset+=m;	//Increase the offset for gradient arrays
 	} // pairs n
 
 #ifdef EAM2
@@ -412,7 +405,7 @@ void calc_forces(int steps){
 		for (i=0; i<n; i++) {
 			int sorte = SORTE(p,i);
 			real r = MAX( 0.0, EAM_RHO(p,i) - embed_pot.begin[sorte]);
-			PAIR_INT_VEC(pot, EAM_DF(p,i), embed_pot, sorte, ntypes, r);
+			PAIR_INT_FAST(pot, EAM_DF(p,i), embed_pot, sorte, r);
 			POTENG(p,i) += pot;
 		}
 	}
@@ -456,6 +449,7 @@ void calc_forces(int steps){
 			}
 
 #ifdef EAM2
+			//Add the gradient of the electron density if needed
 			if (r2 <= rhoCut) {
 				if (type1==type2)
 					g += 0.5 * (EAM_DF(p,n_i) + EAM_DF(q,n_j)) * rho_grad1[i+cellpairOffset];

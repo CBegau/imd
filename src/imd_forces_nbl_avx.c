@@ -130,9 +130,9 @@ void init(void){
 	for (i=0; i<ntypes;i++){
 		for (j=0; j<ntypes;j++){
 			m = i*ntypes + j;
-			cutoffRadii[m] = pair_pot.end[m];
+			cutoffRadii[m] = pair_pot.end[m]+nbl_margin;
 #ifdef EAM2
-			cutoffRadii[m] = MAX(cutoffRadii[m],rho_h_tab.end[m]);
+			cutoffRadii[m] = MAX(cutoffRadii[m],rho_h_tab.end[m]+nbl_margin);
 #endif
 		}
 	}

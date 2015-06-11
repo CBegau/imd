@@ -184,6 +184,9 @@ void make_nblist(void){
 	int i,j, k, n;
 
 	/* update reference positions */
+#ifdef OMP
+#pragma omp parallel for
+#endif
 	for (k = 0; k < ncells; k++) {
 		cell *p = cell_array + cnbrs[k].np;
 		const int n = p->n;
@@ -308,6 +311,9 @@ void calc_forces(int steps){
 	nfc++;
 
 	/* clear per atom accumulation variables, also in buffer cells */
+#ifdef OMP
+#pragma omp parallel for
+#endif
 	for (k = 0; k < nallcells; k++) {
 		cell *p = cell_array + k;
 		const int n = p->n;
@@ -383,29 +389,32 @@ void calc_forces(int steps){
 		const real rhoEndCol2 = rho_h_tab.end[col2];
 #endif
 
-		//Precompute distances
+		//Precompute squared distances and the pair-potential part
 #ifdef INTEL_SIMD
 #pragma ivdep
+#endif
+#ifdef OMP
+#pragma omp parallel for
 #endif
 		for (i=startIndex; i<startIndex+m; i++){
 			int l = i-startIndex;
 			vektor v;
 			cell *p = cell_array+pair[4*l  ];
 			cell *q = cell_array+pair[4*l+1];
+			//Compute squared distance
 			v.x = ORT(q, pair[4*l+3], X) - ORT(p, pair[4*l+2], X);
 			v.y = ORT(q, pair[4*l+3], Y) - ORT(p, pair[4*l+2], Y);
 			v.z = ORT(q, pair[4*l+3], Z) - ORT(p, pair[4*l+2], Z);
-			real r = SPROD(v,v);
-			r2[i] = MIN(potEnd, r);
-		}
-#ifdef INTEL_SIMD
-#pragma ivdep
-#endif
-		for (i=startIndex; i<startIndex+m; i++){
-			real r = MAX( 0.0, r2[i] - potBegin);
+			r2[i] = SPROD(v,v);
+
+			//Clamp distance into the valid range of the potential table
+			real r = MIN(potEnd, r2[i]);
+			r = MAX( 0.0, r - potBegin);
+			//Compute pair potential and store epot and its gradient
 			PAIR_INT_VEC(epot[i], grad[i], pair_pot, col1, 1, r);
 		}
 
+		//Sum up forces and energies from the temporary arrays
 		for (i=startIndex; i<startIndex+m; i++){
 			vektor v, force;
 
@@ -469,22 +478,28 @@ void calc_forces(int steps){
 
 
 #ifdef EAM2
+		//Compute the electron density and the gradients
 		if(type1 == type2){
 #ifdef INTEL_SIMD
 #pragma ivdep
 #endif
+#ifdef OMP
+#pragma omp parallel for
+#endif
 			for (i=startIndex; i<startIndex+m; i++){
-				//Limit the distance r to the cutoff distance
-				//The last value will be zero, so it does not change the result
-				//However, computing the value in any case does not prohibit
-				//vectorization compared to an if-clause
+				//Clamp distance into the valid range of the potential table
 				real r = MIN(r2[i], rhoEndCol1);
-				r = MAX( 0.0, r-rhoBeginCol1);
+				r = MAX( 0.0, r - rhoBeginCol1);
+				//Compute electron density rho and the gradient
+				//Store rho in the array named epot
 				PAIR_INT_VEC(epot[i], rho_grad1[i], rho_h_tab, n, 1, r);
 			}
 		} else {
 #ifdef INTEL_SIMD
 #pragma ivdep
+#endif
+#ifdef OMP
+#pragma omp parallel for
 #endif
 			for (i=startIndex; i<startIndex+m; i++){
 				real r = MIN(r2[i], rhoEndCol1);
@@ -516,7 +531,7 @@ void calc_forces(int steps){
 			}
 		}
 #endif
-		startIndex+=m;
+		startIndex+=m;	//Increase the offset in the
 	}// pairs n
 
 #ifdef EAM2
@@ -529,6 +544,9 @@ void calc_forces(int steps){
 		const int n=p->n;
 #ifdef INTEL_SIMD
 #pragma ivdep
+#endif
+#ifdef OMP
+#pragma omp parallel for
 #endif
 		for (i=0; i<n; i++) {
 			int sorte = SORTE(p,i);
@@ -546,10 +564,6 @@ void calc_forces(int steps){
 		const int* restrict pair = cell_num[n];
 
 		const int m = pairsListLengths[n];
-
-		const real potBegin = rho_h_tab.begin[n];
-		const real potEnd = rho_h_tab.end[n];
-		const real potEndPlus = rho_h_tab.end[n] + 0.1;
 
 		const int type1 = n / ntypes;
 		const int type2 = n % ntypes;

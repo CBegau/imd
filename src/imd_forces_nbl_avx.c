@@ -95,7 +95,7 @@
 
 #define NBLMINLEN 10000
 
-int** restrict cell_num = NULL;
+int** restrict pairLists = NULL;
 int* restrict pairsListLengths = NULL;
 int* restrict pairsListMaxLengths = NULL;
 real* restrict cutoffRadii = NULL;
@@ -106,6 +106,8 @@ real* restrict grad = NULL;
 #ifdef EAM2
 real* restrict rho_grad1 = NULL;
 real* restrict rho_grad2 = NULL;
+real* restrict rho1 = NULL;
+real* restrict rho2 = NULL;
 #endif
 real* restrict r2 = NULL;
 int r2ListSize = 0;
@@ -135,10 +137,10 @@ void init(void){
 		}
 	}
 
-	cell_num = malloc(n * sizeof *cell_num);
+	pairLists = malloc(n * sizeof *pairLists);
 
 	for (i=0; i<n; i++)
-		cell_num[i] = malloc(pairsListMaxLengths[i] * 4 * sizeof *cell_num[i]);
+		pairLists[i] = malloc(pairsListMaxLengths[i] * 4 * sizeof *pairLists[i]);
 
 	initialized = 1;
 }
@@ -153,9 +155,9 @@ void deallocate_nblist(void){
 	if (!initialized) return;
 	int i;
 	for (i=0; i<ntypes * ntypes;i++)
-		free(cell_num[i]);
+		free(pairLists[i]);
 
-	free(cell_num);
+	free(pairLists);
 	free(pairsListLengths);
 	free(cutoffRadii);
 
@@ -249,14 +251,14 @@ void make_nblist(void){
 					n = is*ntypes + js;
 					if (r2 <= cutoffRadii[n]) {
 						k = pairsListLengths[n]++;
-						cell_num[n][4*k  ] = c1;
-						cell_num[n][4*k+1] = c2;
-						cell_num[n][4*k+2] = i;
-						cell_num[n][4*k+3] = j;
+						pairLists[n][4*k  ] = c1;
+						pairLists[n][4*k+1] = c2;
+						pairLists[n][4*k+2] = i;
+						pairLists[n][4*k+3] = j;
 						//Double the size of the table, if running out of space
 						if(pairsListLengths[n] == pairsListMaxLengths[n]){
 							pairsListMaxLengths[n] *= 2;
-							cell_num[n] = realloc(cell_num[n], pairsListMaxLengths[n]*4*sizeof *cell_num[n]);
+							pairLists[n] = realloc(pairLists[n], pairsListMaxLengths[n]*4*sizeof *pairLists[n]);
 						}
 					}
 				}
@@ -358,7 +360,13 @@ void calc_forces(int steps){
 	if(sumList>r2ListSize){
 		r2ListSize = (int)(nbl_size*sumList);
 		if(r2) free(r2);
+		if(grad) free(grad);
+		if(epot) free(epot);
+		
 		r2   = malloc(r2ListSize * sizeof *r2);
+		epot = malloc(r2ListSize * sizeof *epot);
+		grad = malloc(r2ListSize * sizeof *grad);
+
 #ifdef EAM2
 		if(rho_grad1) free(rho_grad1);
 		if(rho_grad2) free(rho_grad2);
@@ -369,15 +377,17 @@ void calc_forces(int steps){
 
 	if(longestList>epotListSize){
 		epotListSize = (int)(nbl_size*longestList);
-		if(grad) free(grad);
-		if(epot) free(epot);
-		epot = malloc(epotListSize * sizeof *epot);
-		grad = malloc(epotListSize * sizeof *grad);
+#ifdef EAM2
+		if(rho1) free(rho1);
+		if(rho2) free(rho2);
+		rho1 = malloc(epotListSize * sizeof *rho1);
+		rho2 = malloc(epotListSize * sizeof *rho2);
+#endif
 	}
 
 	int cellpairOffset = 0;
 	for (n = 0; n<nPairs; n++){
-		const int* restrict pair = cell_num[n];
+		const int* restrict pair = pairLists[n];
 
 		const int m = pairsListLengths[n];
 
@@ -417,68 +427,7 @@ void calc_forces(int steps){
 			real r = MIN(potEnd, r2[i+cellpairOffset]);
 			r = MAX( 0.0, r - potBegin);
 			//Compute pair potential and store epot and its gradient
-			PAIR_INT_VEC(epot[i], grad[i], pair_pot, col1, 1, r);
-		}
-
-		//Sum up forces and energies from the temporary arrays
-		for (i=0; i<m; i++){
-			vektor v, force;
-
-			if (r2[i+cellpairOffset] < potEnd){
-				cell *p = cell_array+pair[4*i  ];
-				cell *q = cell_array+pair[4*i+1];
-				int n_i = pair[4*i+2];
-				int n_j = pair[4*i+3];
-
-				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
-				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
-				v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
-
-				force.x = v.x * grad[i];
-				force.y = v.y * grad[i];
-				force.z = v.z * grad[i];
-
-				KRAFT(q, n_j,X) -= force.x;
-				KRAFT(q, n_j,Y) -= force.y;
-				KRAFT(q, n_j,Z) -= force.z;
-
-				KRAFT(p, n_i,X) += force.x;
-				KRAFT(p, n_i,Y) += force.y;
-				KRAFT(p, n_i,Z) += force.z;
-
-				POTENG(p, n_i) += epot[i] * 0.5;
-				POTENG(q, n_j) += epot[i] * 0.5;
-
-#ifdef P_AXIAL
-				vir_xx -= v.x * force.x;
-				vir_yy -= v.y * force.y;
-				vir_zz -= v.z * force.z;
-#else
-				virial -= r2[i+cellpairOffset] * grad[i];
-#endif
-
-#ifdef STRESS_TENS
-				if (do_press_calc) {
-					/* avoid double counting of the virial */
-					force.x *= 0.5;
-					force.y *= 0.5;
-					force.z *= 0.5;
-
-					PRESSTENS(p, n_i,xx) -= v.x * force.x;
-					PRESSTENS(q, n_j,xx) -= v.x * force.x;
-					PRESSTENS(p, n_i,yy) -= v.y * force.y;
-					PRESSTENS(q, n_j,yy) -= v.y * force.y;
-					PRESSTENS(p, n_i,xy) -= v.x * force.y;
-					PRESSTENS(q, n_j,xy) -= v.x * force.y;
-					PRESSTENS(p, n_i,zz) -= v.z * force.z;
-					PRESSTENS(q, n_j,zz) -= v.z * force.z;
-					PRESSTENS(p, n_i,yz) -= v.y * force.z;
-					PRESSTENS(q, n_j,yz) -= v.y * force.z;
-					PRESSTENS(p, n_i,zx) -= v.z * force.x;
-					PRESSTENS(q, n_j,zx) -= v.z * force.x;
-				}
-#endif
-			}
+			PAIR_INT_VEC(epot[i+cellpairOffset], grad[i+cellpairOffset], pair_pot, col1, 1, r);
 		}
 
 
@@ -496,8 +445,7 @@ void calc_forces(int steps){
 				real r = MIN(r2[i+cellpairOffset], rhoEndCol1);
 				r = MAX( 0.0, r - rhoBeginCol1);
 				//Compute electron density rho and the gradient
-				//Store rho in the array named epot
-				PAIR_INT_VEC(epot[i], rho_grad1[i+cellpairOffset], rho_h_tab, n, 1, r);
+				PAIR_INT_VEC(rho1[i], rho_grad1[i+cellpairOffset], rho_h_tab, n, 1, r);
 			}
 		} else {
 #ifdef INTEL_SIMD
@@ -509,27 +457,27 @@ void calc_forces(int steps){
 			for (i=0; i<m; i++){
 				real r = MIN(r2[i+cellpairOffset], rhoEndCol1);
 				r = MAX( 0.0, r-rhoBeginCol1);
-				PAIR_INT_VEC(epot[i], rho_grad1[i+cellpairOffset], rho_h_tab, col1, 1, r);
+				PAIR_INT_VEC(rho1[i], rho_grad1[i+cellpairOffset], rho_h_tab, col1, 1, r);
 				real s = MIN(r2[i+cellpairOffset], rhoEndCol2);
 				s = MAX( 0.0, s-rhoBeginCol2);
-				PAIR_INT_VEC(grad[i], rho_grad2[i+cellpairOffset], rho_h_tab, col2, 1, s);
+				PAIR_INT_VEC(rho2[i], rho_grad2[i+cellpairOffset], rho_h_tab, col2, 1, s);
 			}
 		}
 
-		//Select the arrays in which the density are store depending if both
-		//atoms in the pair are of the same type
-		real* rho1 = epot;
-		real* rho2 = (type1==type2) ? epot : grad;
+		//Summing up rho
 		for (i=0; i<m; i++){
 			if (r2[i+cellpairOffset] < rhoEndCol1)
-				EAM_RHO(cell_array+pair[4*i+0], pair[4*i+2]) += rho1[i];
-			if (r2[i+cellpairOffset] < rhoEndCol2)
-				EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += rho2[i];
+				EAM_RHO(cell_array+pair[4*i  ], pair[4*i+2]) += rho1[i];
+			if (r2[i+cellpairOffset] < rhoEndCol2){
+				if(type1==type2)
+					EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += rho1[i];
+				else EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += rho2[i];
+			}
 		}
-
 #endif
 		cellpairOffset+=m;	//Increase the offset in the
-	}// pairs n
+
+	} // pairs n
 
 #ifdef EAM2
 
@@ -557,10 +505,12 @@ void calc_forces(int steps){
 
 	/* distribute derivative of embedding energy */
 	send_cells(copy_dF,pack_dF,unpack_dF);
+#endif
 
+	//Reduce all results
 	cellpairOffset = 0;
 	for (n = 0; n < nPairs; n++) {
-		const int* restrict pair = cell_num[n];
+		const int* restrict pair = pairLists[n];
 
 		const int m = pairsListLengths[n];
 
@@ -569,72 +519,83 @@ void calc_forces(int steps){
 		const int col1 = n;
 		const int col2 = type2 * ntypes + type1;
 
+#ifdef EAM2
 		real rhoCut = MAX(rho_h_tab.end[col1], rho_h_tab.end[col2]);
+#endif
+
 		for (i=0; i<m; i++) {
 			vektor v, force;
 
-			if (r2[i+cellpairOffset] <= rhoCut) {
-				cell *p = cell_array+pair[4*i  ];
-				cell *q = cell_array+pair[4*i+1];
-				int n_i = pair[4*i+2];
-				int n_j = pair[4*i+3];
-				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
-				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
-				v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
+			cell *p = cell_array+pair[4*i  ];
+			cell *q = cell_array+pair[4*i+1];
+			int n_i = pair[4*i+2];
+			int n_j = pair[4*i+3];
+			v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
+			v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
+			v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
 
+			real g = 0.;
+			if (r2[i+cellpairOffset] < pair_pot.end[n]){
+				g = grad[i+cellpairOffset];
+				POTENG(p, n_i) += epot[i+cellpairOffset] * 0.5;
+				POTENG(q, n_j) += epot[i+cellpairOffset] * 0.5;
+			}
+
+#ifdef EAM2
+			if (r2[i+cellpairOffset] <= rhoCut) {
 				real grad_df;
 				if (type1==type2)
-					grad_df = 0.5 * (EAM_DF(p,n_i)+ EAM_DF(q,n_j)) * rho_grad1[i+cellpairOffset];
+					g += 0.5 * (EAM_DF(p,n_i)+ EAM_DF(q,n_j)) * rho_grad1[i+cellpairOffset];
 				else
-					grad_df = 0.5 * (EAM_DF(p,n_i) * rho_grad1[i+cellpairOffset] + EAM_DF(q,n_j) * rho_grad2[i+cellpairOffset]);
+					g += 0.5 * (EAM_DF(p,n_i) * rho_grad1[i+cellpairOffset] + EAM_DF(q,n_j) * rho_grad2[i+cellpairOffset]);
+			}
+#endif
 
-				force.x = v.x * grad_df;
-				force.y = v.y * grad_df;
-				force.z = v.z * grad_df;
+			force.x = v.x * g;
+			force.y = v.y * g;
+			force.z = v.z * g;
 
-				KRAFT(q, n_j,X) -= force.x;
-				KRAFT(q, n_j,Y) -= force.y;
-				KRAFT(q, n_j,Z) -= force.z;
+			KRAFT(q, n_j,X) -= force.x;
+			KRAFT(q, n_j,Y) -= force.y;
+			KRAFT(q, n_j,Z) -= force.z;
 
-				KRAFT(p, n_i,X) += force.x;
-				KRAFT(p, n_i,Y) += force.y;
-				KRAFT(p, n_i,Z) += force.z;
+			KRAFT(p, n_i,X) += force.x;
+			KRAFT(p, n_i,Y) += force.y;
+			KRAFT(p, n_i,Z) += force.z;
 
 #ifdef P_AXIAL
-				vir_xx -= v.x * force.x;
-				vir_yy -= v.y * force.y;
-				vir_zz -= v.z * force.z;
+			vir_xx -= v.x * force.x;
+			vir_yy -= v.y * force.y;
+			vir_zz -= v.z * force.z;
 #else
-				virial       -= SPROD(v,force);
+			virial       -= SPROD(v,force);
 #endif
 
 #ifdef STRESS_TENS
-				if (do_press_calc) {
-					/* avoid double counting of the virial */
-					force.x *= 0.5;
-					force.y *= 0.5;
-					force.z *= 0.5;
+			if (do_press_calc) {
+				/* avoid double counting of the virial */
+				force.x *= 0.5;
+				force.y *= 0.5;
+				force.z *= 0.5;
 
-					PRESSTENS(p, n_i,xx) -= v.x * force.x;
-					PRESSTENS(p, n_i,yy) -= v.y * force.y;
-					PRESSTENS(p, n_i,xy) -= v.x * force.y;
-					PRESSTENS(p, n_i,zz) -= v.z * force.z;
-					PRESSTENS(p, n_i,yz) -= v.y * force.z;
-					PRESSTENS(p, n_i,zx) -= v.z * force.x;
-					PRESSTENS(q, n_j,zx) -= v.z * force.x;
-					PRESSTENS(q, n_j,xx) -= v.x * force.x;
-					PRESSTENS(q, n_j,yy) -= v.y * force.y;
-					PRESSTENS(q, n_j,zz) -= v.z * force.z;
-					PRESSTENS(q, n_j,xy) -= v.x * force.y;
-					PRESSTENS(q, n_j,yz) -= v.y * force.z;
-				}
-#endif
+				PRESSTENS(p, n_i,xx) -= v.x * force.x;
+				PRESSTENS(p, n_i,yy) -= v.y * force.y;
+				PRESSTENS(p, n_i,xy) -= v.x * force.y;
+				PRESSTENS(p, n_i,zz) -= v.z * force.z;
+				PRESSTENS(p, n_i,yz) -= v.y * force.z;
+				PRESSTENS(p, n_i,zx) -= v.z * force.x;
+				PRESSTENS(q, n_j,zx) -= v.z * force.x;
+				PRESSTENS(q, n_j,xx) -= v.x * force.x;
+				PRESSTENS(q, n_j,yy) -= v.y * force.y;
+				PRESSTENS(q, n_j,zz) -= v.z * force.z;
+				PRESSTENS(q, n_j,xy) -= v.x * force.y;
+				PRESSTENS(q, n_j,yz) -= v.y * force.z;
 			}
+#endif
 		}
 		cellpairOffset+=m;
 	}//n pairs
 
-#endif //EAM2
 
 	//Sum total potential energy
 	for (k=0; k<nallcells; k++) {

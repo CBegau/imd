@@ -1185,7 +1185,11 @@ else
     PP_FLAGS += -DNBL
   else
     ifneq (,$(strip $(findstring nbl,${MAKETARGET})))
-      FORCESOURCES = imd_forces_nbl.c
+    ifneq (,$(strip $(findstring nblfast,${MAKETARGET})))
+      FORCESOURCES = imd_forces_nbl_fast.c
+     else
+     FORCESOURCES = imd_forces_nbl.c
+     endif
       PP_FLAGS += -DNBL
       ifneq (,$(strip $(findstring kim, ${MAKETARGET})))
 	ERROR = "KIM is not compatible with any NBL force routine"

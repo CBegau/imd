@@ -47,52 +47,6 @@
   grd = 2. * istep * (dv + (chi - 0.5) * d2v);                                \
 }
 
-#define VAL_FUNC_VEC(pot, pt, col, inc, r2)                                  \
-{                                                                            \
-  real r2a, istep, chi, p0, p1, p2, dv, d2v, *ptr;                           \
-  int kk;                                                                   \
-                                                                             \
-  /* indices into potential table */                                         \
-  istep = (pt).invstep[col];                                                 \
-  r2a   = r2 * istep;                                                        \
-  kk    = (int) (r2a);                                                      \
-  chi   = r2a - kk;                                                          \
-                                                                             \
-  /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, (col), kk, (inc), (pt).maxsteps);                 \
-  p0  = *ptr; ptr ++;                                                        \
-  p1  = *ptr; ptr ++;                                                        \
-  p2  = *ptr;                                                                \
-  dv  = p1 - p0;                                                             \
-  d2v = p2 - 2. * p1 + p0;                                                    \
-                                                                             \
-  /* potential value */                                                      \
-  pot = p0 + chi * dv + 0.5 * chi * (chi - 1.) * d2v;                         \
-}
-
-#define DERIV_FUNC_VEC(grd, pt, col, inc, r2)                                \
-{                                                                            \
-  real r2a, istep, chi, p0, p1, p2, dv, d2v, *ptr;                           \
-  int kk;                                                                   \
-                                                                             \
-  /* indices into potential table */                                         \
-  istep = (pt).invstep[col];                                                 \
-  r2a   = r2 * istep;                                                        \
-  kk    = (int) (r2a);                                                      \
-  chi   = r2a - kk;                                                          \
-                                                                             \
-  /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, (col), kk, (inc), (pt).maxsteps);                 \
-  p0  = *ptr; ptr ++;                                                       \
-  p1  = *ptr; ptr ++;                                                       \
-  p2  = *ptr;                                                                \
-  dv  = p1 - p0;                                                             \
-  d2v = p2 - 2. * p1 + p0;                                                    \
-                                                                             \
-  /* twice the derivative */                                                 \
-  grd = 2. * istep * (dv + (chi - 0.5) * d2v);                                \
-}
-
 #define NBLMINLEN 10000
 
 int** restrict pairLists = NULL;
@@ -106,8 +60,7 @@ real* restrict grad = NULL;
 real* restrict rho_grad1 = NULL;
 real* restrict rho_grad2 = NULL;
 #endif
-real* restrict r2 = NULL;
-int r2ListSize = 0;
+int gradListSize = 0;
 
 void init(void){
 	int i,j,m;
@@ -157,14 +110,13 @@ void deallocate_nblist(void){
 	free(pairsListLengths);
 	free(cutoffRadii);
 
-	if(r2ListSize != 0){
+	if(gradListSize != 0){
 		free(grad);
-		free(r2);
 #ifdef EAM2
 		free(rho_grad1);
 		free(rho_grad2);
 #endif
-		r2ListSize = 0;
+		gradListSize = 0;
 	}
 
 
@@ -350,18 +302,15 @@ void calc_forces(int steps){
 		sumList += pairsListLengths[i];
 	}
 
-	if(sumList>r2ListSize){
-		r2ListSize = (int)(nbl_size*sumList);
-		if(r2) free(r2);
+	if(sumList>gradListSize){
+		gradListSize = (int)(nbl_size*sumList);
 		if(grad) free(grad);
-		r2   = malloc(r2ListSize * sizeof *r2);
-		grad = malloc(r2ListSize * sizeof *grad);
-
+		grad = malloc(gradListSize * sizeof *grad);
 #ifdef EAM2
 		if(rho_grad1) free(rho_grad1);
 		if(rho_grad2) free(rho_grad2);
-		rho_grad1 = malloc(r2ListSize * sizeof *rho_grad1);
-		rho_grad2 = malloc(r2ListSize * sizeof *rho_grad2);
+		rho_grad1 = malloc(gradListSize * sizeof *rho_grad1);
+		rho_grad2 = malloc(gradListSize * sizeof *rho_grad2);
 #endif
 	}
 
@@ -398,7 +347,6 @@ void calc_forces(int steps){
 			v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
 			v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
 			real rd = SPROD(v,v);
-			r2[i+cellpairOffset] = rd;
 
 			if (rd < pair_pot.end[n]){
 				//Clamp distance into the valid range of the potential table
@@ -497,13 +445,18 @@ void calc_forces(int steps){
 			int n_i = pair[4*i+2];
 			int n_j = pair[4*i+3];
 
+			v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
+			v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
+			v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
+			real r2 = SPROD(v,v);
+
 			real g = 0.;
-			if (r2[i+cellpairOffset] < pair_pot.end[n]){
+			if (r2 < pair_pot.end[n]){
 				g = grad[i+cellpairOffset];
 			}
 
 #ifdef EAM2
-			if (r2[i+cellpairOffset] <= rhoCut) {
+			if (r2 <= rhoCut) {
 				if (type1==type2)
 					g += 0.5 * (EAM_DF(p,n_i) + EAM_DF(q,n_j)) * rho_grad1[i+cellpairOffset];
 				else
@@ -512,10 +465,6 @@ void calc_forces(int steps){
 #endif
 
 			if(g!=0){
-				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
-				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
-				v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
-
 				force.x = v.x * g;
 				force.y = v.y * g;
 				force.z = v.z * g;

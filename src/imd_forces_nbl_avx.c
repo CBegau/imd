@@ -109,6 +109,7 @@ real* restrict rho_grad2 = NULL;
 #endif
 real* restrict r2 = NULL;
 int r2ListSize = 0;
+int epotListSize = 0;
 
 void init(void){
 	int i,j,m;
@@ -348,18 +349,16 @@ void calc_forces(int steps){
 
 
 	int sumList = 0;
-	for (i = 0; i<nPairs; i++)
+	int longestList = 0;
+	for (i = 0; i<nPairs; i++){
 		sumList += pairsListLengths[i];
+		longestList = MAX(longestList, pairsListLengths[i]);
+	}
 
 	if(sumList>r2ListSize){
 		r2ListSize = (int)(nbl_size*sumList);
-		if(grad) free(grad);
-		if(epot) free(epot);
 		if(r2) free(r2);
-		epot = malloc(r2ListSize * sizeof *epot);
-		grad = malloc(r2ListSize * sizeof *grad);
 		r2   = malloc(r2ListSize * sizeof *r2);
-
 #ifdef EAM2
 		if(rho_grad1) free(rho_grad1);
 		if(rho_grad2) free(rho_grad2);
@@ -368,7 +367,15 @@ void calc_forces(int steps){
 #endif
 	}
 
-	int startIndex = 0;
+	if(longestList>epotListSize){
+		epotListSize = (int)(nbl_size*longestList);
+		if(grad) free(grad);
+		if(epot) free(epot);
+		epot = malloc(epotListSize * sizeof *epot);
+		grad = malloc(epotListSize * sizeof *grad);
+	}
+
+	int cellpairOffset = 0;
 	for (n = 0; n<nPairs; n++){
 		const int* restrict pair = cell_num[n];
 
@@ -396,34 +403,32 @@ void calc_forces(int steps){
 #ifdef OMP
 #pragma omp parallel for
 #endif
-		for (i=startIndex; i<startIndex+m; i++){
-			int l = i-startIndex;
+		for (i=0; i<m; i++){
 			vektor v;
-			cell *p = cell_array+pair[4*l  ];
-			cell *q = cell_array+pair[4*l+1];
+			cell *p = cell_array+pair[4*i  ];
+			cell *q = cell_array+pair[4*i+1];
 			//Compute squared distance
-			v.x = ORT(q, pair[4*l+3], X) - ORT(p, pair[4*l+2], X);
-			v.y = ORT(q, pair[4*l+3], Y) - ORT(p, pair[4*l+2], Y);
-			v.z = ORT(q, pair[4*l+3], Z) - ORT(p, pair[4*l+2], Z);
-			r2[i] = SPROD(v,v);
+			v.x = ORT(q, pair[4*i+3], X) - ORT(p, pair[4*i+2], X);
+			v.y = ORT(q, pair[4*i+3], Y) - ORT(p, pair[4*i+2], Y);
+			v.z = ORT(q, pair[4*i+3], Z) - ORT(p, pair[4*i+2], Z);
+			r2[i+cellpairOffset] = SPROD(v,v);
 
 			//Clamp distance into the valid range of the potential table
-			real r = MIN(potEnd, r2[i]);
+			real r = MIN(potEnd, r2[i+cellpairOffset]);
 			r = MAX( 0.0, r - potBegin);
 			//Compute pair potential and store epot and its gradient
 			PAIR_INT_VEC(epot[i], grad[i], pair_pot, col1, 1, r);
 		}
 
 		//Sum up forces and energies from the temporary arrays
-		for (i=startIndex; i<startIndex+m; i++){
+		for (i=0; i<m; i++){
 			vektor v, force;
 
-			if (r2[i] < potEnd){
-				int l = i-startIndex;
-				cell *p = cell_array+pair[4*l  ];
-				cell *q = cell_array+pair[4*l+1];
-				int n_i = pair[4*l+2];
-				int n_j = pair[4*l+3];
+			if (r2[i+cellpairOffset] < potEnd){
+				cell *p = cell_array+pair[4*i  ];
+				cell *q = cell_array+pair[4*i+1];
+				int n_i = pair[4*i+2];
+				int n_j = pair[4*i+3];
 
 				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
 				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
@@ -449,7 +454,7 @@ void calc_forces(int steps){
 				vir_yy -= v.y * force.y;
 				vir_zz -= v.z * force.z;
 #else
-				virial -= r2[i] * grad[i];
+				virial -= r2[i+cellpairOffset] * grad[i];
 #endif
 
 #ifdef STRESS_TENS
@@ -486,13 +491,13 @@ void calc_forces(int steps){
 #ifdef OMP
 #pragma omp parallel for
 #endif
-			for (i=startIndex; i<startIndex+m; i++){
+			for (i=0; i<m; i++){
 				//Clamp distance into the valid range of the potential table
-				real r = MIN(r2[i], rhoEndCol1);
+				real r = MIN(r2[i+cellpairOffset], rhoEndCol1);
 				r = MAX( 0.0, r - rhoBeginCol1);
 				//Compute electron density rho and the gradient
 				//Store rho in the array named epot
-				PAIR_INT_VEC(epot[i], rho_grad1[i], rho_h_tab, n, 1, r);
+				PAIR_INT_VEC(epot[i], rho_grad1[i+cellpairOffset], rho_h_tab, n, 1, r);
 			}
 		} else {
 #ifdef INTEL_SIMD
@@ -501,40 +506,34 @@ void calc_forces(int steps){
 #ifdef OMP
 #pragma omp parallel for
 #endif
-			for (i=startIndex; i<startIndex+m; i++){
-				real r = MIN(r2[i], rhoEndCol1);
+			for (i=0; i<m; i++){
+				real r = MIN(r2[i+cellpairOffset], rhoEndCol1);
 				r = MAX( 0.0, r-rhoBeginCol1);
-				PAIR_INT_VEC(epot[i], rho_grad1[i], rho_h_tab, col1, 1, r);
-				real s = MIN(r2[i], rhoEndCol2);
+				PAIR_INT_VEC(epot[i], rho_grad1[i+cellpairOffset], rho_h_tab, col1, 1, r);
+				real s = MIN(r2[i+cellpairOffset], rhoEndCol2);
 				s = MAX( 0.0, s-rhoBeginCol2);
-				PAIR_INT_VEC(grad[i], rho_grad2[i], rho_h_tab, col2, 1, s);
+				PAIR_INT_VEC(grad[i], rho_grad2[i+cellpairOffset], rho_h_tab, col2, 1, s);
 			}
 		}
 
-
-		if(type1 == type2){
-			for (i=startIndex; i<startIndex+m; i++){
-				int l = i-startIndex;
-				if (r2[i] < rhoEndCol1){
-					int l = i-startIndex;
-					EAM_RHO(cell_array+pair[4*l+0], pair[4*l+2]) += epot[i];
-					EAM_RHO(cell_array+pair[4*l+1], pair[4*l+3]) += epot[i];
-				}
-			}
-		} else {
-			for (i=startIndex; i<startIndex+m; i++){
-				int l = i-startIndex;
-				if (r2[i] < rhoEndCol1)
-					EAM_RHO(cell_array+pair[4*l+0], pair[4*l+2]) += epot[i];
-				if (r2[i] < rhoEndCol2)
-					EAM_RHO(cell_array+pair[4*l+1], pair[4*l+3]) += grad[i];
-			}
+		//Select the arrays in which the density are store depending if both
+		//atoms in the pair are of the same type
+		real* rho1 = epot;
+		real* rho2 = (type1==type2) ? epot : grad;
+		for (i=0; i<m; i++){
+			if (r2[i+cellpairOffset] < rhoEndCol1)
+				EAM_RHO(cell_array+pair[4*i+0], pair[4*i+2]) += rho1[i];
+			if (r2[i+cellpairOffset] < rhoEndCol2)
+				EAM_RHO(cell_array+pair[4*i+1], pair[4*i+3]) += rho2[i];
 		}
+
 #endif
-		startIndex+=m;	//Increase the offset in the
+		cellpairOffset+=m;	//Increase the offset in the
 	}// pairs n
 
 #ifdef EAM2
+
+	//Sum up rho over buffer cells
 	send_forces(add_rho,pack_rho,unpack_add_rho);
 
 	/* compute embedding energy and its derivative */
@@ -559,7 +558,7 @@ void calc_forces(int steps){
 	/* distribute derivative of embedding energy */
 	send_cells(copy_dF,pack_dF,unpack_dF);
 
-	startIndex = 0;
+	cellpairOffset = 0;
 	for (n = 0; n < nPairs; n++) {
 		const int* restrict pair = cell_num[n];
 
@@ -571,24 +570,23 @@ void calc_forces(int steps){
 		const int col2 = type2 * ntypes + type1;
 
 		real rhoCut = MAX(rho_h_tab.end[col1], rho_h_tab.end[col2]);
-		for (i=startIndex; i<startIndex+m; i++) {
+		for (i=0; i<m; i++) {
 			vektor v, force;
 
-			if (r2[i] <= rhoCut) {
-				int l = i-startIndex;
-				cell *p = cell_array+pair[4*l  ];
-				cell *q = cell_array+pair[4*l+1];
-				int n_i = pair[4*l+2];
-				int n_j = pair[4*l+3];
+			if (r2[i+cellpairOffset] <= rhoCut) {
+				cell *p = cell_array+pair[4*i  ];
+				cell *q = cell_array+pair[4*i+1];
+				int n_i = pair[4*i+2];
+				int n_j = pair[4*i+3];
 				v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
 				v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
 				v.z = ORT(q, n_j, Z) - ORT(p, n_i, Z);
 
 				real grad_df;
 				if (type1==type2)
-					grad_df = 0.5 * (EAM_DF(p,n_i)+ EAM_DF(q,n_j)) * rho_grad1[i];
+					grad_df = 0.5 * (EAM_DF(p,n_i)+ EAM_DF(q,n_j)) * rho_grad1[i+cellpairOffset];
 				else
-					grad_df = 0.5 * (EAM_DF(p,n_i) * rho_grad1[i] + EAM_DF(q,n_j) * rho_grad2[i]);
+					grad_df = 0.5 * (EAM_DF(p,n_i) * rho_grad1[i+cellpairOffset] + EAM_DF(q,n_j) * rho_grad2[i+cellpairOffset]);
 
 				force.x = v.x * grad_df;
 				force.y = v.y * grad_df;
@@ -633,7 +631,7 @@ void calc_forces(int steps){
 #endif
 			}
 		}
-		startIndex+=m;
+		cellpairOffset+=m;
 	}//n pairs
 
 #endif //EAM2

@@ -47,52 +47,6 @@
   grd = 2. * istep * (dv + (chi - 0.5) * d2v);                                \
 }
 
-#define VAL_FUNC_VEC(pot, pt, col, inc, r2)                                  \
-{                                                                            \
-  real r2a, istep, chi, p0, p1, p2, dv, d2v, *ptr;                           \
-  int kk;                                                                   \
-                                                                             \
-  /* indices into potential table */                                         \
-  istep = (pt).invstep[col];                                                 \
-  r2a   = r2 * istep;                                                        \
-  kk    = (int) (r2a);                                                      \
-  chi   = r2a - kk;                                                          \
-                                                                             \
-  /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, (col), kk, (inc), (pt).maxsteps);                 \
-  p0  = *ptr; ptr ++;                                                        \
-  p1  = *ptr; ptr ++;                                                        \
-  p2  = *ptr;                                                                \
-  dv  = p1 - p0;                                                             \
-  d2v = p2 - 2. * p1 + p0;                                                    \
-                                                                             \
-  /* potential value */                                                      \
-  pot = p0 + chi * dv + 0.5 * chi * (chi - 1.) * d2v;                         \
-}
-
-#define DERIV_FUNC_VEC(grd, pt, col, inc, r2)                                \
-{                                                                            \
-  real r2a, istep, chi, p0, p1, p2, dv, d2v, *ptr;                           \
-  int kk;                                                                   \
-                                                                             \
-  /* indices into potential table */                                         \
-  istep = (pt).invstep[col];                                                 \
-  r2a   = r2 * istep;                                                        \
-  kk    = (int) (r2a);                                                      \
-  chi   = r2a - kk;                                                          \
-                                                                             \
-  /* intermediate values */                                                  \
-  ptr = PTR_2D((pt).table, (col), kk, (inc), (pt).maxsteps);                 \
-  p0  = *ptr; ptr ++;                                                       \
-  p1  = *ptr; ptr ++;                                                       \
-  p2  = *ptr;                                                                \
-  dv  = p1 - p0;                                                             \
-  d2v = p2 - 2. * p1 + p0;                                                    \
-                                                                             \
-  /* twice the derivative */                                                 \
-  grd = 2. * istep * (dv + (chi - 0.5) * d2v);                                \
-}
-
 #define NBLMINLEN 10000
 
 int** restrict pairLists = NULL;
@@ -457,12 +411,13 @@ void calc_forces(int steps){
 #pragma omp parallel for
 #endif
 			for (i=0; i<m; i++){
-				real r = MIN(r2[i+cellpairOffset], rhoEndCol1);
+				int l = i+cellpairOffset;
+				real r = MIN(r2[l], rhoEndCol1);
 				r = MAX( 0.0, r-rhoBeginCol1);
-				PAIR_INT_VEC(rho1[i], rho_grad1[i+cellpairOffset], rho_h_tab, col1, 1, r);
-				real s = MIN(r2[i+cellpairOffset], rhoEndCol2);
+				PAIR_INT_VEC(rho1[i], rho_grad1[l], rho_h_tab, col1, 1, r);
+				real s = MIN(r2[l], rhoEndCol2);
 				s = MAX( 0.0, s-rhoBeginCol2);
-				PAIR_INT_VEC(rho2[i], rho_grad2[i+cellpairOffset], rho_h_tab, col2, 1, s);
+				PAIR_INT_VEC(rho2[i], rho_grad2[l], rho_h_tab, col2, 1, s);
 			}
 		}
 
@@ -486,6 +441,9 @@ void calc_forces(int steps){
 	//Sum up rho over buffer cells
 	send_forces(add_rho,pack_rho,unpack_add_rho);
 
+#ifdef OMP
+#pragma omp parallel for
+#endif
 	/* compute embedding energy and its derivative */
 	for (k=0; k<ncells; k++) {
 		cell *p = CELLPTR(k);
@@ -493,9 +451,6 @@ void calc_forces(int steps){
 		const int n=p->n;
 #ifdef INTEL_SIMD
 #pragma ivdep
-#endif
-#ifdef OMP
-#pragma omp parallel for
 #endif
 		for (i=0; i<n; i++) {
 			int sorte = SORTE(p,i);
@@ -600,6 +555,9 @@ void calc_forces(int steps){
 
 
 	//Sum total potential energy
+#ifdef OMP
+#pragma omp parallel for reduction(+:tot_pot_energy)
+#endif
 	for (k=0; k<nallcells; k++) {
 		cell *p = cell_array+k;
 		int i;

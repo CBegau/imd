@@ -287,7 +287,7 @@ ifeq (vulcan2-icc,${IMDSYS})
   MPICH_CLINKER = icc
   OMPI_MPICC    = icc
   BIN_DIR	= ${HOME}/bin/${HOSTTYPE}
-  OPT_FLAGS	+= -O3 -std=c99 -ip -xAVX -DINTEL_SIMD -fp-model fast=2 -ansi-alias -Wstrict-aliasing -ipo
+  OPT_FLAGS	+= -O3 -ip -xAVX -DINTEL_SIMD -fp-model fast=2 -ansi-alias -Wstrict-aliasing -ipo
   MPI_FLAGS     += 
   OMP_FLAGS	+= -openmp
   OMPI_FLAGS	+= -openmp
@@ -508,7 +508,7 @@ ifeq (native-gcc,${IMDSYS})
   OMPI_MPICC    = gcc
   MPICH_CLINKER = gcc
   BIN_DIR	= 	${HOME}/bin/${HOSTTYPE}
-  OPT_FLAGS	+= -O3 -march=native -std=c99
+  OPT_FLAGS	+= -O3 -march=native
   OMP_FLAGS	+= -fopenmp
   DEBUG_FLAGS	+= -g3 -O0
   PROF_FLAGS	+= -g3 -pg
@@ -1833,6 +1833,11 @@ imd_forces.o: imd_forces.c
 
 imd_forces_nbl.o: imd_forces_nbl.c
 	${CC} ${CFLAGS} ${PP_FLAGS} ${RCD_FLAGS} ${NOALIAS} -c imd_forces_nbl.c
+
+imd_forces_nbl_fast.o: imd_forces_nbl_fast.c
+	${CC} ${CFLAGS} ${PP_FLAGS} ${RCD_FLAGS} -std=c99 -c imd_forces_nbl_fast.c
+imd_forces_nbl_avx.o: imd_forces_nbl_avx.c
+	${CC} ${CFLAGS} ${PP_FLAGS} ${RCD_FLAGS} -std=c99 -c imd_forces_nbl_avx.c
 
 # Uncommented by Frank Pister
 imd_forces_cbe.o: imd_forces_cbe.c

@@ -47,7 +47,11 @@
 
 #define NBLMINLEN 10000
 
-int** restrict pairLists = NULL;
+struct ppair {
+	int p[4];
+};
+
+struct ppair** restrict pairLists = NULL;
 int* restrict pairsListLengths = NULL;
 int* restrict pairsListMaxLengths = NULL;
 real* restrict cutoffRadii = NULL;
@@ -88,7 +92,7 @@ void init(void){
 	pairLists = malloc(n * sizeof *pairLists);
 
 	for (i=0; i<n; i++)
-		pairLists[i] = malloc(pairsListMaxLengths[i] * 4 * sizeof *pairLists[i]);
+		pairLists[i] = malloc(pairsListMaxLengths[i] * sizeof *pairLists[i]);
 
 	initialized = 1;
 }
@@ -185,14 +189,14 @@ void make_nblist(void){
 					//Test if this pair of atoms is inside the cutoff radius
 					if (r2 <= cutoffRadii[n]) {
 						k = pairsListLengths[n]++;
-						pairLists[n][4*k  ] = c1;
-						pairLists[n][4*k+1] = c2;
-						pairLists[n][4*k+2] = i;
-						pairLists[n][4*k+3] = j;
+						pairLists[n][k].p[0] = c1;
+						pairLists[n][k].p[1] = c2;
+						pairLists[n][k].p[2] = i;
+						pairLists[n][k].p[3] = j;
 						//Double the size of the table, if running out of space
 						if(pairsListLengths[n] == pairsListMaxLengths[n]){
 							pairsListMaxLengths[n] *= 2;
-							pairLists[n] = realloc(pairLists[n], pairsListMaxLengths[n]*4*sizeof *pairLists[n]);
+							pairLists[n] = realloc(pairLists[n], pairsListMaxLengths[n]*sizeof *pairLists[n]);
 						}
 					}
 				}
@@ -306,7 +310,7 @@ void calc_forces(int steps){
 
 	int cellpairOffset = 0;
 	for (n = 0; n<nPairs; n++){
-		const int* restrict pair = pairLists[n];
+		const struct ppair* restrict pair = pairLists[n];
 
 		const int m = pairsListLengths[n];
 
@@ -328,10 +332,10 @@ void calc_forces(int steps){
 		//Precompute squared distances and the pair-potential part
 		for (i=0; i<m; i++){
 			vektor v;
-			cell *p = cell_array+pair[4*i  ];
-			cell *q = cell_array+pair[4*i+1];
-			int n_i = pair[4*i+2];
-			int n_j = pair[4*i+3];
+			cell *p = cell_array+pair[i].p[0];
+			cell *q = cell_array+pair[i].p[1];
+			int n_i = pair[i].p[2];
+			int n_j = pair[i].p[3];
 			//Compute squared distance
 			v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
 			v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);
@@ -417,7 +421,7 @@ void calc_forces(int steps){
 	//Reduce all results
 	cellpairOffset = 0;
 	for (n = 0; n < nPairs; n++) {
-		const int* restrict pair = pairLists[n];
+		const struct ppair* restrict pair = pairLists[n];
 
 		const int m = pairsListLengths[n];
 
@@ -433,10 +437,10 @@ void calc_forces(int steps){
 		for (i=0; i<m; i++) {
 			vektor v, force;
 
-			cell *p = cell_array+pair[4*i  ];
-			cell *q = cell_array+pair[4*i+1];
-			int n_i = pair[4*i+2];
-			int n_j = pair[4*i+3];
+			cell *p = cell_array+pair[i].p[0];
+			cell *q = cell_array+pair[i].p[1];
+			int n_i = pair[i].p[2];
+			int n_j = pair[i].p[3];
 
 			v.x = ORT(q, n_j, X) - ORT(p, n_i, X);
 			v.y = ORT(q, n_j, Y) - ORT(p, n_i, Y);

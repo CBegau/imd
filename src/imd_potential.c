@@ -368,7 +368,8 @@ void read_pot_table1(pot_table_t *pt, int ncols, char *filename,
   }
 
   /* increase table size for security */
-  tablesize = ncols * (pt->maxsteps+2);
+  pt->maxsteps+=2;
+  tablesize = ncols * (pt->maxsteps);
   pt->table = (real *) realloc(pt->table, tablesize*sizeof(real));
   if (NULL==pt->table)
     error_str("Cannot extend memory for function table %s.",filename);

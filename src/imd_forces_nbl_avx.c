@@ -368,7 +368,7 @@ void calc_forces(int steps){
 
 		//Precompute squared distances and the pair-potential part
 #ifdef INTEL_SIMD
-#pragma ivdep
+#pragma simd
 #endif
 #ifdef OMP
 #pragma omp parallel for
@@ -397,7 +397,7 @@ void calc_forces(int steps){
 		//Compute the electron density and the gradients
 		if(type1 == type2){
 #ifdef INTEL_SIMD
-#pragma ivdep
+#pragma simd
 #endif
 #ifdef OMP
 #pragma omp parallel for
@@ -411,7 +411,7 @@ void calc_forces(int steps){
 			}
 		} else {
 #ifdef INTEL_SIMD
-#pragma ivdep
+#pragma simd
 #endif
 #ifdef OMP
 #pragma omp parallel for

@@ -148,7 +148,7 @@ void make_nblist(void){
 
 	/* for all cells */
 	int c;
-	for (c = 0; c < ncells2; c++) {
+	for (c = 0; c < ncells; c++) {
 		int i, c1 = cnbrs[c].np;
 		cell *p = cell_array + c1;
 

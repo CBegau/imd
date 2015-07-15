@@ -24,19 +24,89 @@
 #include "imd.h"
 #include "potaccess.h"
 
-#define PAIR_INT_FAST(pot, grd, pt, col, r2)                                 \
+#if   defined(FOURPOINT)
+#define   PAIR_INT_FAST   PAIR_INT4_FAST
+#elif defined(SPLINE)
+#define   PAIR_INT_FAST   PAIR_INT_SP_FAST
+#else
+#define   PAIR_INT_FAST   PAIR_INT3_FAST
+#endif
+
+
+#define PAIR_INT_SP_FAST(pot, grd, pt, col, r2)					             \
 {                                                                            \
-  real r2a, istep, chi, dv, d2v, *t;                                         \
-  int kk;                                                                    \
+  real r2a, a, b, a2, b2, istep, step, st6, p1, p2, d21, d22;                \
+  int k;                                                                     \
+                                                                             \
+  /* indices into potential table */                                         \
+  istep = (pt).invstep[col];                                                 \
+  step  = (pt).step[col];                                                    \
+  r2a   = r2 * istep;                                                        \
+  k     = POS_TRUNC(r2a);                                                    \
+  b     = r2a - k;                                                           \
+  a     = 1.0 - b;                                                           \
+                                                                             \
+  /* intermediate values */                                                  \
+  k    += (col)*(pt).maxsteps;                                               \
+  p1    = (pt).table[k];                                                     \
+  d21   = (pt).table2[k];                                                    \
+  k++;                                                                       \
+  p2    = (pt).table[k];                                                     \
+  d22   = (pt).table2[k];                                                    \
+  a2    = a * a - 1.;                                                        \
+  b2    = b * b - 1.;                                                        \
+  st6   = step / 6.;                                                         \
+                                                                             \
+  /* potential and twice the derivative */                                   \
+  pot  = a * p1 + b * p2 + (a * a2 * d21 + b * b2 * d22) * st6 * step;       \
+  grd = 2.*((p2 - p1) * istep + ((3.*b2 + 2.) * d22 - (3.*a2 + 2.) * d21) * st6);\
+}
+
+#define PAIR_INT4_FAST(pot, grd, pt, col, r2)                     			 \
+{                                                                            \
+  real r2a, istep, chi, *t;									                 \
+  real fac[4], dfac[4];	      												 \
+  int  k;                                                                    \
                                                                              \
   /* indices into potential table */                                         \
   istep = (pt).invstep[col];                                                 \
   r2a   = r2 * istep;                                                        \
-  kk    = (int) (r2a);                                                       \
-  chi   = r2a - kk;                                                          \
+  k     = POS_TRUNC(r2a);                                                    \
+  chi   = r2a - k;                                                           \
+                                                                             \
+  /* factors for the interpolation */                                        \
+  fac[0] = -(1.0/6.0) * chi * (chi-1.0) * (chi-2.0);                         \
+  fac[1] =        0.5 * (chi*chi-1.0) * (chi-2.0);                           \
+  fac[2] =       -0.5 * chi * (chi+1.0) * (chi-2.0);                         \
+  fac[3] =  (1.0/6.0) * chi * (chi*chi-1.0);                                 \
+                                                                             \
+  /* factors for the interpolation of the derivative */                      \
+  dfac[0] = -(1.0/6.0) * ((3.0*chi-6.0)*chi+2.0);                            \
+  dfac[1] =        0.5 * ((3.0*chi-4.0)*chi-1.0);                            \
+  dfac[2] =       -0.5 * ((3.0*chi-2.0)*chi-2.0);                            \
+  dfac[3] =    1.0/6.0 * (3.0*chi*chi-1.0);                                  \
                                                                              \
   /* intermediate values */                                                  \
-  t = PTR_2D((pt).table, (col),kk, 0,(pt).maxsteps);                         \
+  t = PTR_2D((pt).table, (col), k-1, 0, (pt).maxsteps);                      \
+  /* potential energy */                                                     \
+  pot = fac[0]*t[0] + fac[1]*t[1] + fac[2]*t[2] + fac[3]*t[3];               \
+  /* twice the derivative */                                                 \
+  grd = 2. * istep * (dfac[0]*t[0] + dfac[1]*t[1] + dfac[2]*t[2] + dfac[3]*t[3]);\
+}
+
+#define PAIR_INT3_FAST(pot, grd, pt, col, r2)                                \
+{                                                                            \
+  real r2a, istep, chi, dv, d2v, *t;                                         \
+  int k;                                                                     \
+                                                                             \
+  /* indices into potential table */                                         \
+  istep = (pt).invstep[col];                                                 \
+  r2a   = r2 * istep;                                                        \
+  k    = (int) (r2a);                                                        \
+  chi   = r2a - k;                                                           \
+                                                                             \
+  /* intermediate values */                                                  \
+  t = PTR_2D((pt).table, (col),k, 0,(pt).maxsteps);                          \
   dv  = t[1] - t[0];                                                         \
   d2v = t[2] - 2. * t[1] + t[0];                                             \
                                                                              \

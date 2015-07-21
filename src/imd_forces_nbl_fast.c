@@ -173,15 +173,16 @@ void deallocate_nblist(void){
 	for (i=0; i<ntypes * ntypes;i++)
 		free(pairLists[i]);
 
-	free(pairLists);
-	free(pairsListLengths);
-	free(cutoffRadii);
+	free(pairLists); pairLists = NULL;
+	free(pairsListLengths); pairsListLengths = NULL;
+	free(pairsListMaxLengths); pairsListMaxLengths = NULL;
+	free(cutoffRadii);	cutoffRadii = NULL;
 
 	if(gradListSize != 0){
-		free(grad);
+		free(grad);	grad = NULL;
 #ifdef EAM2
-		free(rho_grad1);
-		free(rho_grad2);
+		free(rho_grad1);	rho_grad1 = NULL;
+		free(rho_grad2);	rho_grad2 = NULL;
 #endif
 		gradListSize = 0;
 	}

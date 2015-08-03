@@ -445,12 +445,16 @@ void calc_forces(int steps){
 					real rho;
 					PAIR_INT_FAST(rho, rho_grad1[i+cellpairOffset], rho_h_tab, col1, r);
 					EAM_RHO(p, n_i) += rho;
+				} else {
+					rho_grad1[i+cellpairOffset] = 0.;
 				}
 				if (rd < rhoEndCol2){
 					real s = MAX( 0.0, rd-rhoBeginCol2);
 					real rho;
 					PAIR_INT_FAST(rho, rho_grad2[i+cellpairOffset], rho_h_tab, col2, s);
 					EAM_RHO(q, n_j) += rho;
+				} else {
+					rho_grad2[i+cellpairOffset] = 0.;
 				}
 
 			}
@@ -525,7 +529,7 @@ void calc_forces(int steps){
 
 #ifdef EAM2
 			//Add the gradient of the electron density if needed
-			if (r2 <= rhoCut) {
+			if (r2 < rhoCut) {
 				if (type1==type2)
 					g += 0.5 * (EAM_DF(p,n_i) + EAM_DF(q,n_j)) * rho_grad1[i+cellpairOffset];
 				else

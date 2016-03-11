@@ -497,8 +497,8 @@ void create_pot_table(pot_table_t *pt)
     /* Allocate or extend memory for potential table */
     if (have_potfile==0) {  /* have no potential table yet */
       pt->ncols    = ncols;
-      pt->maxsteps = maxres;
-      tablesize    = ncols * (pt->maxsteps + 2);
+      pt->maxsteps = maxres + 2;
+      tablesize    = ncols * (pt->maxsteps);
       pt->begin    = (real *) malloc(ncols*sizeof(real));
       pt->end      = (real *) malloc(ncols*sizeof(real));
       pt->step     = (real *) malloc(ncols*sizeof(real));
@@ -513,7 +513,7 @@ void create_pot_table(pot_table_t *pt)
     } else {   /* we possibly have to extend potential table */
       if (maxres > pt->maxsteps) {
         pt->maxsteps = maxres;
-        tablesize    = ncols * (pt->maxsteps + 2);
+        tablesize    = ncols * (pt->maxsteps);
         pt->table    = (real *) realloc(pt->table, tablesize * sizeof(real));
         if (NULL==pt->table)
           error("Cannot extend memory for potential table.");
@@ -1278,6 +1278,8 @@ void init_threepoint( pot_table_t *pt, int ncols )
     y    = pt->table;
     n    = pt->len[col];
     m    = col*(pt->maxsteps);
+    printf("Length %i, maxstep %i\n", n, pt->maxsteps);
+
     /* for security, we continue the last interpolation polynomial */
     y[ n   + m] = 3*y[(n-1)+m] - 3*y[(n-2)+m] +   y[(n-3)+m];
     y[(n+1)+ m] = 6*y[(n-1)+m] - 8*y[(n-2)+m] + 3*y[(n-3)+m];

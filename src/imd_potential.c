@@ -1278,6 +1278,7 @@ void init_threepoint( pot_table_t *pt, int ncols )
     y    = pt->table;
     n    = pt->len[col];
     m    = col*(pt->maxsteps);
+    printf("Length %i, maxstep %i\n", n, pt->maxsteps);
 
     /* for security, we continue the last interpolation polynomial */
     y[ n   + m] = 3*y[(n-1)+m] - 3*y[(n-2)+m] +   y[(n-3)+m];
